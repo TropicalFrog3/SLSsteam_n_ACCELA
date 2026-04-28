@@ -1,0 +1,6 @@
+[submodule "tools/SLScheevo"]
+	path = tools/SLScheevo
+	url = https://github.com/xamionex/SLScheevo
+[submodule "wiki"]
+	path = wiki
+	url = git@github.com:AceSLS/SLSsteam.wiki.git

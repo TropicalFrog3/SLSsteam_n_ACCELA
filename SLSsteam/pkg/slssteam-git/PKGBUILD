@@ -1,0 +1,57 @@
+# Maintainer: Ace! _SL/S <acesls@protonmail.com>
+pkgname="slssteam-git"
+pkgver=20260408184420
+pkgrel=1
+pkgdesc="Steamclient Mod - Pre release"
+arch=("i686" "x86_64")
+url="https://github.com/AceSLS/SLSsteam"
+license=("AGPL-3.0-only")
+
+depends=("steam"
+		"lib32-openssl"
+		"lib32-glibc"
+		"lib32-gcc-libs")
+
+optdepends=("steam-native"
+			"ccache: Speeds up compilation"
+			"dotnet-runtime-9.0: sls-ticket-generator")
+
+provides=("slssteam")
+conflicts=("slssteam")
+
+source=("git+$url#branch=dev")
+makedepends=("git"
+			"gcc"
+			"dotnet-sdk-9.0")
+
+#Disable stripping to not mess up disturb ticket-grabber
+options=(!strip)
+
+sha256sums=('SKIP')
+validpgpkeys=("63AB8F4BF8A62EEEB8D8C7584410F8CF7129B2D6")
+
+pkgver() {
+	cd "$srcdir/SLSsteam"
+	git describe --long --tags --abbrev=7 | sed 's/\([^-]*-g\)/r\1/;s/-/./g'
+}
+
+build() {
+	cd "$srcdir/SLSsteam"
+	make
+}
+
+package() {
+	cd "$pkgdir"
+
+	mkdir -p "$pkgdir/usr/share/doc/"
+	cp -rvL "$srcdir/SLSsteam/docs" "$pkgdir/usr/share/doc/SLSsteam"
+
+	#TODO: Create make install target
+	install -D "$srcdir/SLSsteam/bin/SLSsteam.so" "$pkgdir/usr/lib32/libSLSsteam.so"
+	install -D "$srcdir/SLSsteam/bin/library-inject.so" "$pkgdir/usr/lib32/libSLS-library-inject.so"
+	install -D "$srcdir/SLSsteam/res/SLSsteam.desktop" "$pkgdir/usr/share/applications/SLSsteam.desktop"
+	install -D "$srcdir/SLSsteam/res/SLSsteam-native.desktop" "$pkgdir/usr/share/applications/SLSsteam-native.desktop"
+	install -D "$srcdir/SLSsteam/res/logo.png" "$pkgdir/usr/share/pixmaps/SLSsteam.png"
+
+	install -D "$srcdir/SLSsteam/tools/ticket-grabber/bin/Release/net9.0/linux-x64/publish/ticket-grabber" "$pkgdir/usr/bin/sls-ticket-grabber"
+}

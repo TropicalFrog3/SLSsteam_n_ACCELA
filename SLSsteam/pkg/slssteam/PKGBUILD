@@ -1,0 +1,48 @@
+# Maintainer: Ace! _SL/S <acesls@protonmail.com>
+pkgname="slssteam"
+pkgver=20260408184420
+pkgrel=1
+pkgdesc="Steamclient Mod"
+arch=("i686" "x86_64")
+url="https://github.com/AceSLS/SLSsteam"
+license=("AGPL-3.0-only")
+
+depends=("steam"
+		"lib32-openssl"
+		"lib32-glibc"
+		"lib32-gcc-libs")
+
+optdepends=("steam-native"
+			"ccache: Speeds up compilation"
+			"dotnet-runtime-9.0: sls-ticket-generator")
+
+provides=("slssteam")
+conflicts=("slssteam-git")
+
+source=("https://github.com/AceSLS/SLSsteam/archive/refs/tags/$pkgver.tar.gz")
+makedepends=("gcc"
+			"dotnet-sdk-9.0")
+
+#Disable stripping to not mess up disturb ticket-grabber
+options=(!strip)
+
+sha256sums=('663b4264238a15e562ad90f32c3fb002630727a5b7b20a31e0d69b0b14d4b97c')
+validpgpkeys=("63AB8F4BF8A62EEEB8D8C7584410F8CF7129B2D6")
+
+build() {
+	cd "$srcdir/SLSsteam-$pkgver"
+	make
+}
+
+package() {
+	cd "$pkgdir"
+
+	install -D "$srcdir/SLSsteam-$pkgver/bin/SLSsteam.so" "$pkgdir/usr/lib32/libSLSsteam.so"
+	install -D "$srcdir/SLSsteam-$pkgver/bin/library-inject.so" "$pkgdir/usr/lib32/libSLS-library-inject.so"
+	install -D "$srcdir/SLSsteam-$pkgver/res/SLSsteam.desktop" "$pkgdir/usr/share/applications/SLSsteam.desktop"
+	install -D "$srcdir/SLSsteam-$pkgver/res/SLSsteam-native.desktop" "$pkgdir/usr/share/applications/SLSsteam-native.desktop"
+	install -D "$srcdir/SLSsteam-$pkgver/res/logo.png" "$pkgdir/usr/share/pixmaps/SLSsteam.png"
+
+	#Disabled until dev reaches main
+	install -D "$srcdir/SLSsteam-$pkgver/tools/ticket-grabber/bin/Release/net9.0/linux-x64/publish/ticket-grabber" "$pkgdir/usr/bin/sls-ticket-grabber"
+}

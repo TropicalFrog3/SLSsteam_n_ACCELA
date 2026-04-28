@@ -1,0 +1,70 @@
+# Build artifacts and object files
+bin/
+obj/
+build/
+dist/
+*.o
+*.a
+*.so
+*.dylib
+*.exe
+*.dll
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+.eggs/
+.venv/
+venv/
+ENV/
+env/
+.env
+.Python
+*.so
+
+# C++
+.clangd
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+*.cmake
+Makefile
+
+# IDE/Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-*
+.project
+.classpath
+.c9/
+
+# Dependencies
+node_modules/
+vendor/
+lib/
+
+# System files
+.git/
+.github/
+.DS_Store
+Thumbs.db
+
+# Generated/Temporary files
+*.bak
+*.tmp
+*.log
+*.out
+zip/
+dist/
+
+# Nix
+result/
+.direnv/
+.envrc
