@@ -68,3 +68,5 @@ dist/
 result/
 .direnv/
 .envrc
+
+Side-Project-DO-NOT-USE-IN-THE-REAL-PROJECT/*

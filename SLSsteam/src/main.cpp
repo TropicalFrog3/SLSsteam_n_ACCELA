@@ -7,6 +7,7 @@
 #include "update.hpp"
 #include "utils.hpp"
 #include "feats/cefsizefix.hpp"
+#include "feats/storeinject.hpp"
 
 #include "libmem/libmem.h"
 #include <curl/curl.h>
@@ -68,6 +69,7 @@ static bool cleanEnvVar(const char* varName, const char* endsWith)
 static void unload()
 {
 	CefSizeFix::removeSizeFixScript();
+	StoreInject::shutdown();
 	Hooks::remove();
 	curl_global_cleanup();
 
@@ -210,6 +212,9 @@ static void load()
 
 	// Inject the CEF size fix script into Steam's UI
 	CefSizeFix::injectSizeFixScript();
+
+	// Start the Store injection background thread
+	StoreInject::init();
 
 	if (g_config.notifyInit.get())
 	{

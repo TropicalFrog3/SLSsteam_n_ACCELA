@@ -187,6 +187,9 @@ bool CConfig::loadSettings()
 	extendedLogging = getSetting<bool>(node, "ExtendedLogging", false);
 	logLevel = getSetting<unsigned int>(node, "LogLevel", 2);
 
+	morrenusKey = getSetting<std::string>(node, "MorrenusKey", "");
+	ryuuKey = getSetting<std::string>(node, "RyuuKey", "");
+
 	//TODO: Create smart logging function to log them automatically via getSetting
 	g_pLog->info("DisableFamilyShareLock: %i\n", disableFamilyLock.get());
 	g_pLog->info("UseWhitelist: %i\n", useWhiteList.get());
@@ -531,6 +534,60 @@ bool CConfig::addAdditionalAppId(uint32_t appId)
 
 	g_pLog->info("addAdditionalAppId: Appended AppID %u to AdditionalApps in %s\n", appId, configPath.c_str());
 	// CFileWatcher will detect the change and trigger loadSettings() automatically
+	return true;
+}
+
+bool CConfig::updateApiAuth(const std::string& newMorrenus, const std::string& newRyuu)
+{
+	const std::string configPath = getPath();
+	std::ifstream inFile(configPath);
+	if (!inFile.is_open()) return false;
+
+	std::vector<std::string> lines;
+	std::string line;
+	bool foundMorrenus = false;
+	bool foundRyuu = false;
+
+	while (std::getline(inFile, line))
+	{
+		if (line.find("MorrenusKey:") == 0)
+		{
+			lines.push_back("MorrenusKey: \"" + newMorrenus + "\"");
+			foundMorrenus = true;
+		}
+		else if (line.find("RyuuKey:") == 0)
+		{
+			lines.push_back("RyuuKey: \"" + newRyuu + "\"");
+			foundRyuu = true;
+		}
+		else
+		{
+			lines.push_back(line);
+		}
+	}
+	inFile.close();
+
+	if (!foundMorrenus) lines.push_back("MorrenusKey: \"" + newMorrenus + "\"");
+	if (!foundRyuu) lines.push_back("RyuuKey: \"" + newRyuu + "\"");
+
+	std::string tmpPath = configPath + ".tmp";
+	std::ofstream outFile(tmpPath);
+	if (!outFile.is_open()) return false;
+
+	for (size_t i = 0; i < lines.size(); ++i)
+	{
+		outFile << lines[i];
+		if (i + 1 < lines.size()) outFile << '\n';
+	}
+	outFile.close();
+
+	if (std::rename(tmpPath.c_str(), configPath.c_str()) != 0)
+	{
+		std::remove(tmpPath.c_str());
+		return false;
+	}
+
+	g_pLog->info("updateApiAuth: Updated API credentials in %s\n", configPath.c_str());
 	return true;
 }
 

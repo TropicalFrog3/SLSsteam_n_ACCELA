@@ -69,6 +69,10 @@ public:
 	MTVariable<unsigned int> logLevel;
 	MTVariable<bool> extendedLogging;
 
+	// API Auth
+	MTVariable<std::string> morrenusKey;
+	MTVariable<std::string> ryuuKey;
+
 	//Using incomplete class to avoid runtime linking errors
 	CFileWatcher* watcher;
 
@@ -185,6 +189,9 @@ public:
 
 	bool isAddedAppId(uint32_t appId);
 	bool addAdditionalAppId(uint32_t appId);
+	
+	// Write auth to config.yaml
+	bool updateApiAuth(const std::string& morrenusKey, const std::string& ryuuKey);
 
 	bool shouldExcludeAppId(uint32_t appId);
 	uint32_t getDenuvoGameOwner(uint32_t appId);
