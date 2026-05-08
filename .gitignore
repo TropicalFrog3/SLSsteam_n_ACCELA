@@ -1,5 +1,4 @@
 # Build artifacts and object files
-bin/
 obj/
 build/
 dist/
@@ -12,25 +11,10 @@ dist/
 
 # Python
 __pycache__/
-*.py[cod]
-*$py.class
-*.egg-info/
-*.egg
-.eggs/
-.venv/
-venv/
-ENV/
-env/
-.env
-.Python
-*.so
 
 # C++
 .clangd
 CMakeFiles/
-CMakeCache.txt
-cmake_install.cmake
-*.cmake
 
 # IDE/Editor
 .vscode/
@@ -46,8 +30,6 @@ cmake_install.cmake
 
 # Dependencies
 node_modules/
-vendor/
-lib/
 
 # System files
 .git/
