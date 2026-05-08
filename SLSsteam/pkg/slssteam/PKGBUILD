@@ -1,6 +1,6 @@
 # Maintainer: Ace! _SL/S <acesls@protonmail.com>
 pkgname="slssteam"
-pkgver=20260408184420
+pkgver=20260429110636
 pkgrel=1
 pkgdesc="Steamclient Mod"
 arch=("i686" "x86_64")
@@ -26,7 +26,7 @@ makedepends=("gcc"
 #Disable stripping to not mess up disturb ticket-grabber
 options=(!strip)
 
-sha256sums=('663b4264238a15e562ad90f32c3fb002630727a5b7b20a31e0d69b0b14d4b97c')
+sha256sums=('06e85c0f6156d37ebb84c8105449f62f8accdee7da9ee58f6d47a09bad0636e9')
 validpgpkeys=("63AB8F4BF8A62EEEB8D8C7584410F8CF7129B2D6")
 
 build() {

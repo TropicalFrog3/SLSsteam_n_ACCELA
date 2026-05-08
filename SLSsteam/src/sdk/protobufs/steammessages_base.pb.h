@@ -6650,6 +6650,8 @@ class UserSystemInformation PROTOBUF_FINAL :
     kNumGpuFieldNumber = 6,
     kGamingDeviceTypeFieldNumber = 11,
     kVramSizeFieldNumber = 17,
+    kScreenWidthFieldNumber = 18,
+    kScreenHeightFieldNumber = 19,
   };
   // optional string manufacturer = 1;
   bool has_manufacturer() const;
@@ -6929,6 +6931,32 @@ class UserSystemInformation PROTOBUF_FINAL :
   void _internal_set_vram_size(::PROTOBUF_NAMESPACE_ID::uint32 value);
   public:
 
+  // optional uint32 screen_width = 18;
+  bool has_screen_width() const;
+  private:
+  bool _internal_has_screen_width() const;
+  public:
+  void clear_screen_width();
+  ::PROTOBUF_NAMESPACE_ID::uint32 screen_width() const;
+  void set_screen_width(::PROTOBUF_NAMESPACE_ID::uint32 value);
+  private:
+  ::PROTOBUF_NAMESPACE_ID::uint32 _internal_screen_width() const;
+  void _internal_set_screen_width(::PROTOBUF_NAMESPACE_ID::uint32 value);
+  public:
+
+  // optional uint32 screen_height = 19;
+  bool has_screen_height() const;
+  private:
+  bool _internal_has_screen_height() const;
+  public:
+  void clear_screen_height();
+  ::PROTOBUF_NAMESPACE_ID::uint32 screen_height() const;
+  void set_screen_height(::PROTOBUF_NAMESPACE_ID::uint32 value);
+  private:
+  ::PROTOBUF_NAMESPACE_ID::uint32 _internal_screen_height() const;
+  void _internal_set_screen_height(::PROTOBUF_NAMESPACE_ID::uint32 value);
+  public:
+
   // @@protoc_insertion_point(class_scope:UserSystemInformation)
  private:
   class _Internal;
@@ -6954,6 +6982,8 @@ class UserSystemInformation PROTOBUF_FINAL :
   ::PROTOBUF_NAMESPACE_ID::uint32 num_gpu_;
   ::PROTOBUF_NAMESPACE_ID::uint32 gaming_device_type_;
   ::PROTOBUF_NAMESPACE_ID::uint32 vram_size_;
+  ::PROTOBUF_NAMESPACE_ID::uint32 screen_width_;
+  ::PROTOBUF_NAMESPACE_ID::uint32 screen_height_;
   friend struct ::TableStruct_steammessages_5fbase_2eproto;
 };
 // ===================================================================
@@ -16110,6 +16140,62 @@ inline void UserSystemInformation::_internal_set_vram_size(::PROTOBUF_NAMESPACE_
 inline void UserSystemInformation::set_vram_size(::PROTOBUF_NAMESPACE_ID::uint32 value) {
   _internal_set_vram_size(value);
   // @@protoc_insertion_point(field_set:UserSystemInformation.vram_size)
+}
+
+// optional uint32 screen_width = 18;
+inline bool UserSystemInformation::_internal_has_screen_width() const {
+  bool value = (_has_bits_[0] & 0x00010000u) != 0;
+  return value;
+}
+inline bool UserSystemInformation::has_screen_width() const {
+  return _internal_has_screen_width();
+}
+inline void UserSystemInformation::clear_screen_width() {
+  screen_width_ = 0u;
+  _has_bits_[0] &= ~0x00010000u;
+}
+inline ::PROTOBUF_NAMESPACE_ID::uint32 UserSystemInformation::_internal_screen_width() const {
+  return screen_width_;
+}
+inline ::PROTOBUF_NAMESPACE_ID::uint32 UserSystemInformation::screen_width() const {
+  // @@protoc_insertion_point(field_get:UserSystemInformation.screen_width)
+  return _internal_screen_width();
+}
+inline void UserSystemInformation::_internal_set_screen_width(::PROTOBUF_NAMESPACE_ID::uint32 value) {
+  _has_bits_[0] |= 0x00010000u;
+  screen_width_ = value;
+}
+inline void UserSystemInformation::set_screen_width(::PROTOBUF_NAMESPACE_ID::uint32 value) {
+  _internal_set_screen_width(value);
+  // @@protoc_insertion_point(field_set:UserSystemInformation.screen_width)
+}
+
+// optional uint32 screen_height = 19;
+inline bool UserSystemInformation::_internal_has_screen_height() const {
+  bool value = (_has_bits_[0] & 0x00020000u) != 0;
+  return value;
+}
+inline bool UserSystemInformation::has_screen_height() const {
+  return _internal_has_screen_height();
+}
+inline void UserSystemInformation::clear_screen_height() {
+  screen_height_ = 0u;
+  _has_bits_[0] &= ~0x00020000u;
+}
+inline ::PROTOBUF_NAMESPACE_ID::uint32 UserSystemInformation::_internal_screen_height() const {
+  return screen_height_;
+}
+inline ::PROTOBUF_NAMESPACE_ID::uint32 UserSystemInformation::screen_height() const {
+  // @@protoc_insertion_point(field_get:UserSystemInformation.screen_height)
+  return _internal_screen_height();
+}
+inline void UserSystemInformation::_internal_set_screen_height(::PROTOBUF_NAMESPACE_ID::uint32 value) {
+  _has_bits_[0] |= 0x00020000u;
+  screen_height_ = value;
+}
+inline void UserSystemInformation::set_screen_height(::PROTOBUF_NAMESPACE_ID::uint32 value) {
+  _internal_set_screen_height(value);
+  // @@protoc_insertion_point(field_set:UserSystemInformation.screen_height)
 }
 
 #ifdef __GNUC__

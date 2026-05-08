@@ -485,7 +485,9 @@ constexpr UserSystemInformation::UserSystemInformation(
   , system_ram_(PROTOBUF_ULONGLONG(0))
   , num_gpu_(0u)
   , gaming_device_type_(0u)
-  , vram_size_(0u){}
+  , vram_size_(0u)
+  , screen_width_(0u)
+  , screen_height_(0u){}
 struct UserSystemInformationDefaultTypeInternal {
   constexpr UserSystemInformationDefaultTypeInternal()
     : _instance(::PROTOBUF_NAMESPACE_ID::internal::ConstantInitialized{}) {}
@@ -10984,6 +10986,12 @@ class UserSystemInformation::_Internal {
   static void set_has_vram_size(HasBits* has_bits) {
     (*has_bits)[0] |= 32768u;
   }
+  static void set_has_screen_width(HasBits* has_bits) {
+    (*has_bits)[0] |= 65536u;
+  }
+  static void set_has_screen_height(HasBits* has_bits) {
+    (*has_bits)[0] |= 131072u;
+  }
 };
 
 UserSystemInformation::UserSystemInformation(::PROTOBUF_NAMESPACE_ID::Arena* arena)
@@ -11047,8 +11055,8 @@ UserSystemInformation::UserSystemInformation(const UserSystemInformation& from)
       GetArena());
   }
   ::memcpy(&dx_vendorid_, &from.dx_vendorid_,
-    static_cast<size_t>(reinterpret_cast<char*>(&vram_size_) -
-    reinterpret_cast<char*>(&dx_vendorid_)) + sizeof(vram_size_));
+    static_cast<size_t>(reinterpret_cast<char*>(&screen_height_) -
+    reinterpret_cast<char*>(&dx_vendorid_)) + sizeof(screen_height_));
   // @@protoc_insertion_point(copy_constructor:UserSystemInformation)
 }
 
@@ -11065,8 +11073,8 @@ driver_version_.UnsafeSetDefault(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStr
 driver_date_.UnsafeSetDefault(&::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited());
 ::memset(reinterpret_cast<char*>(this) + static_cast<size_t>(
     reinterpret_cast<char*>(&dx_vendorid_) - reinterpret_cast<char*>(this)),
-    0, static_cast<size_t>(reinterpret_cast<char*>(&vram_size_) -
-    reinterpret_cast<char*>(&dx_vendorid_)) + sizeof(vram_size_));
+    0, static_cast<size_t>(reinterpret_cast<char*>(&screen_height_) -
+    reinterpret_cast<char*>(&dx_vendorid_)) + sizeof(screen_height_));
 }
 
 UserSystemInformation::~UserSystemInformation() {
@@ -11144,6 +11152,11 @@ void UserSystemInformation::Clear() {
     ::memset(&dx_vendorid_, 0, static_cast<size_t>(
         reinterpret_cast<char*>(&vram_size_) -
         reinterpret_cast<char*>(&dx_vendorid_)) + sizeof(vram_size_));
+  }
+  if (cached_has_bits & 0x00030000u) {
+    ::memset(&screen_width_, 0, static_cast<size_t>(
+        reinterpret_cast<char*>(&screen_height_) -
+        reinterpret_cast<char*>(&screen_width_)) + sizeof(screen_height_));
   }
   _has_bits_.Clear();
   _internal_metadata_.Clear<std::string>();
@@ -11285,6 +11298,22 @@ const char* UserSystemInformation::_InternalParse(const char* ptr, ::PROTOBUF_NA
           CHK_(ptr);
         } else goto handle_unusual;
         continue;
+      // optional uint32 screen_width = 18;
+      case 18:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<::PROTOBUF_NAMESPACE_ID::uint8>(tag) == 144)) {
+          _Internal::set_has_screen_width(&has_bits);
+          screen_width_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
+          CHK_(ptr);
+        } else goto handle_unusual;
+        continue;
+      // optional uint32 screen_height = 19;
+      case 19:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<::PROTOBUF_NAMESPACE_ID::uint8>(tag) == 152)) {
+          _Internal::set_has_screen_height(&has_bits);
+          screen_height_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
+          CHK_(ptr);
+        } else goto handle_unusual;
+        continue;
       default: {
       handle_unusual:
         if ((tag & 7) == 4 || tag == 0) {
@@ -11409,6 +11438,18 @@ failure:
   if (cached_has_bits & 0x00008000u) {
     target = stream->EnsureSpace(target);
     target = ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::WriteUInt32ToArray(17, this->_internal_vram_size(), target);
+  }
+
+  // optional uint32 screen_width = 18;
+  if (cached_has_bits & 0x00010000u) {
+    target = stream->EnsureSpace(target);
+    target = ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::WriteUInt32ToArray(18, this->_internal_screen_width(), target);
+  }
+
+  // optional uint32 screen_height = 19;
+  if (cached_has_bits & 0x00020000u) {
+    target = stream->EnsureSpace(target);
+    target = ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::WriteUInt32ToArray(19, this->_internal_screen_height(), target);
   }
 
   if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
@@ -11544,6 +11585,22 @@ size_t UserSystemInformation::ByteSizeLong() const {
     }
 
   }
+  if (cached_has_bits & 0x00030000u) {
+    // optional uint32 screen_width = 18;
+    if (cached_has_bits & 0x00010000u) {
+      total_size += 2 +
+        ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::UInt32Size(
+          this->_internal_screen_width());
+    }
+
+    // optional uint32 screen_height = 19;
+    if (cached_has_bits & 0x00020000u) {
+      total_size += 2 +
+        ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::UInt32Size(
+          this->_internal_screen_height());
+    }
+
+  }
   if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
     total_size += _internal_metadata_.unknown_fields<std::string>(::PROTOBUF_NAMESPACE_ID::internal::GetEmptyString).size();
   }
@@ -11619,6 +11676,15 @@ void UserSystemInformation::MergeFrom(const UserSystemInformation& from) {
     }
     _has_bits_[0] |= cached_has_bits;
   }
+  if (cached_has_bits & 0x00030000u) {
+    if (cached_has_bits & 0x00010000u) {
+      screen_width_ = from.screen_width_;
+    }
+    if (cached_has_bits & 0x00020000u) {
+      screen_height_ = from.screen_height_;
+    }
+    _has_bits_[0] |= cached_has_bits;
+  }
 }
 
 void UserSystemInformation::CopyFrom(const UserSystemInformation& from) {
@@ -11647,8 +11713,8 @@ void UserSystemInformation::InternalSwap(UserSystemInformation* other) {
   driver_version_.Swap(&other->driver_version_, &::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited(), GetArena());
   driver_date_.Swap(&other->driver_date_, &::PROTOBUF_NAMESPACE_ID::internal::GetEmptyStringAlreadyInited(), GetArena());
   ::PROTOBUF_NAMESPACE_ID::internal::memswap<
-      PROTOBUF_FIELD_OFFSET(UserSystemInformation, vram_size_)
-      + sizeof(UserSystemInformation::vram_size_)
+      PROTOBUF_FIELD_OFFSET(UserSystemInformation, screen_height_)
+      + sizeof(UserSystemInformation::screen_height_)
       - PROTOBUF_FIELD_OFFSET(UserSystemInformation, dx_vendorid_)>(
           reinterpret_cast<char*>(&dx_vendorid_),
           reinterpret_cast<char*>(&other->dx_vendorid_));

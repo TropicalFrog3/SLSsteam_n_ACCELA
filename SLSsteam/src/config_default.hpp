@@ -59,10 +59,6 @@ IdleStatus:
   AppId: 0
   Title: ""
 
-UnownedStatus:
-  AppId: 0
-  Title: ""
-
 #Override game titles. Only works with owned appIds! For injected appIds use either UnownedStatus or combine them with FakeAppIds
 GameTitles:
 

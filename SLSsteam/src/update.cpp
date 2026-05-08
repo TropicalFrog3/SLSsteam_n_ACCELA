@@ -1,14 +1,12 @@
 #include "update.hpp"
 
 #include "config.hpp"
+#include "curl.hpp"
 #include "globals.hpp"
 #include "log.hpp"
 #include "utils.hpp"
 #include "version.hpp"
 
-#include <curl/curl.h>
-#include <curl/easy.h>
-#include "yaml-cpp/yaml.h"
 
 #include <filesystem>
 #include <fstream>
@@ -20,25 +18,11 @@ static CURL* curl = nullptr;
 
 std::map<uint64_t, std::unordered_set<std::string>> Updater::clientHashMap = std::map<uint64_t, std::unordered_set<std::string>>();
 
-static size_t writeCallback(const char* content, size_t size, size_t memberSize, std::string* data)
-{
-	data->append(content, size * memberSize);
-	return size * memberSize;
-}
-
 bool Updater::init()
 {
 	std::string data;
-
-	curl = curl_easy_init();
-	curl_easy_setopt(curl, CURLOPT_URL, "https://raw.githubusercontent.com/AceSLS/SLSsteam/refs/heads/main/res/updates.yaml");
-	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
-	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &data);
-
-	auto res = curl_easy_perform(curl);
+	int res = Curl::getString("https://raw.githubusercontent.com/AceSLS/SLSsteam/refs/heads/main/res/updates.yaml", data);
 	g_pLog->info("Curl Res: %u\n", res);
-
-	curl_easy_cleanup(curl);
 
 	if(res != 0)
 	{

@@ -72,6 +72,16 @@ namespace Patterns
 		SigFollowMode::Relative
 	};
 
+	namespace CAPIJob
+	{
+		Pattern_t GetPlayerStats
+		{
+			"CAPIJob::GetPlayerStats",
+			"E8 ? ? ? ? 83 C4 10 89 C5 E9 ? ? ? ? ? ? 80 BE ? ? ? ? 00",
+			SigFollowMode::Relative
+		};
+	}
+
 	namespace CProtoBufMsgBase
 	{
 		Pattern_t InitFromPacket
@@ -253,7 +263,7 @@ namespace Patterns
 		Pattern_t RunIPCFrame
 		{
 			"IClientUGC::RunIPCFrame",
-			"E8 ? ? ? ? 8B 85 ? ? ? ? 83 C4 10 3D 14 0C D2 71",
+			"E8 ? ? ? ? 8B 85 ? ? ? ? 83 C4 10 3D 1B 0C D2 71",
 			SigFollowMode::PrologueUpwards,
 			std::vector<uint8_t> { 0x56, 0x57, 0xe5, 0x89, 0x55 }
 		};

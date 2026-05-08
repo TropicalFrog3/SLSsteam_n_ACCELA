@@ -6,6 +6,16 @@
 #include "../log.hpp"
 
 
+void Achievements::getPlayerStats(uint32_t& eresult)
+{
+	if (eresult == ERESULT_OK)
+	{
+		return;
+	}
+
+	eresult = ERESULT_NO_CONNECTION;
+}
+
 void Achievements::recvMessage(const CProtoBufMsgBase* msg)
 {
 	if (msg->type != EMSG_REQUEST_USERSTATS_RESPONSE)

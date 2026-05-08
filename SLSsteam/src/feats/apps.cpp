@@ -402,18 +402,14 @@ void Apps::sendGamesPlayed(CMsgClientGamesPlayed* msg)
 		g_pLog->debug("Playing game %llu with flags %u & pid %u\n", game.game_id(), game.game_flags(), game.process_id());
 	}
 
-	if (owned)
+	if (owned || msg->games_played_size() > 0)
 	{
 		return;
 	}
 
-	const int games = msg->games_played_size();
-	const auto statusApp = games ? g_config.unownedStatus.get() : g_config.idleStatus.get();
+	const auto statusApp = g_config.idleStatus.get();
 	if (statusApp.appId)
 	{
-		//pMsg->send(); //Send original message first, otherwise Valve's backend might fuck up the order
-		//Only happens in owned games for some reason, so idk
-
 		auto game = msg->add_games_played();
 		game->set_game_id(statusApp.appId);
 		game->set_game_extra_info(statusApp.title);

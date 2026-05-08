@@ -335,6 +335,23 @@ static void hkTraceIPC(const char* iface, const char* fn)
 	}
 }
 
+static uint32_t hkCAPIJob_GetPlayerStats(void* pAPIJob)
+{
+	uint32_t res = Hooks::CAPIJob_GetPlayerStats.tramp.fn(pAPIJob);
+
+	g_pLog->debug
+	(
+		"%s(%p) -> %i\n",
+		Hooks::CAPIJob_GetPlayerStats.name.c_str(),
+		pAPIJob,
+		res
+	);
+
+	Achievements::getPlayerStats(res);
+
+	return res;
+}
+
 static void hkProtoBufMsgBase_InitFromPacket(CProtoBufMsgBase* pMsg, void* pSrc)
 {
 	Hooks::CProtoBufMsgBase_InitFromPacket.tramp.fn(pMsg, pSrc);
@@ -1250,6 +1267,8 @@ namespace Hooks
 	DetourHook<IClientUser_RunIPCFrame_t> IClientUser_RunIPCFrame;
 	DetourHook<IClientUserStats_RunIPCFrame_t> IClientUserStats_RunIPCFrame;
 
+	DetourHook<CAPIJob_GetPlayerStats_t> CAPIJob_GetPlayerStats;
+
 	DetourHook<CProtoBufMsgBase_InitFromPacket_t> CProtoBufMsgBase_InitFromPacket;
 	DetourHook<CProtoBufMsgBase_Send_t> CProtoBufMsgBase_Send;
 
@@ -1307,6 +1326,8 @@ bool Hooks::setup()
 	bool succeeded =
 		TraceIPC.setup(Patterns::TraceIPC, &hkTraceIPC)
 
+		&& CAPIJob_GetPlayerStats.setup(Patterns::CAPIJob::GetPlayerStats, &hkCAPIJob_GetPlayerStats)
+
 		&& CProtoBufMsgBase_InitFromPacket.setup(Patterns::CProtoBufMsgBase::InitFromPacket, &hkProtoBufMsgBase_InitFromPacket)
 		&& CProtoBufMsgBase_Send.setup(Patterns::CProtoBufMsgBase::Send, &hkProtoBufMsgBase_Send)
 
@@ -1353,6 +1374,8 @@ void Hooks::place()
 	//Detours
 	TraceIPC.place();
 
+	CAPIJob_GetPlayerStats.place();
+
 	CProtoBufMsgBase_InitFromPacket.place();
 	CProtoBufMsgBase_Send.place();
 
@@ -1390,6 +1413,8 @@ void Hooks::remove()
 {
 	//Detours
 	TraceIPC.remove();
+
+	CAPIJob_GetPlayerStats.remove();
 
 	CProtoBufMsgBase_InitFromPacket.remove();
 	CProtoBufMsgBase_Send.remove();

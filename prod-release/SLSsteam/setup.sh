@@ -131,6 +131,20 @@ install_slssteam()
 	fi
 
 	cp -v ./bin/* "$SLSDIR/"
+
+	# Copy configuration files to ~/.config/SLSsteam
+	SLSCONFIG_DIR="$HOME/.config/SLSsteam"
+	if [ ! -d "$SLSCONFIG_DIR" ]; then
+		mkdir -p "$SLSCONFIG_DIR"
+		if [[ $? -ne 0 ]]; then
+			echo "Warning: Unable to create $SLSCONFIG_DIR"
+		fi
+	fi
+
+	if [ -f "./res/config.yaml" ]; then
+		cp -v ./res/config.yaml "$SLSCONFIG_DIR/"
+		echo "Copied config.yaml to $SLSCONFIG_DIR/"
+	fi
 }
 
 install_flatpak()
@@ -159,6 +173,20 @@ install_flatpak()
 	fi
 
 	cp -v ./bin/* "$FLATPAK_SLSDIR/"
+
+	# Copy configuration files for Flatpak
+	FLATPAK_SLSCONFIG_DIR="$HOME/.var/app/$FLATPAK_APP_ID/.config/SLSsteam"
+	if [ ! -d "$FLATPAK_SLSCONFIG_DIR" ]; then
+		mkdir -p "$FLATPAK_SLSCONFIG_DIR"
+		if [[ $? -ne 0 ]]; then
+			echo "Warning: Unable to create $FLATPAK_SLSCONFIG_DIR"
+		fi
+	fi
+
+	if [ -f "./res/config.yaml" ]; then
+		cp -v ./res/config.yaml "$FLATPAK_SLSCONFIG_DIR/"
+		echo "Copied config.yaml to $FLATPAK_SLSCONFIG_DIR/"
+	fi
 
 	flatpak override --user --env=LD_AUDIT="$FLATPAK_LD_AUDIT" --env=SHARED_LIBRARY_GUARD=0 "$FLATPAK_APP_ID"
 
