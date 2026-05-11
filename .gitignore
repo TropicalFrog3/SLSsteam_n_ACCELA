@@ -44,6 +44,7 @@ Thumbs.db
 zip/
 dist/
 SLSsteam/scratch/
+prod-release/*
 
 # Nix
 result/

@@ -31,8 +31,6 @@ namespace LuaDownload
         int unavailableCode;
     };
 
-    // Free APIs — same list as the LuaTools side project (api.json)
-    // Free APIs — same list as the LuaTools side project (api.json)
     static const ApiProvider g_apis[] = {
         {
             "Ryuu (API Key)",
