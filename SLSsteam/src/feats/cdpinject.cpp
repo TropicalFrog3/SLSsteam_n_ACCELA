@@ -1,6 +1,7 @@
 #include "cdpinject.hpp"
 #include "../log.hpp"
 #include "../config.hpp"
+#include "apps.hpp"
 
 #include <cstring>
 #include <random>
@@ -334,6 +335,9 @@ namespace CDPInject
 
     bool injectJS(const std::string& wsUrl, const std::string& jsCode)
     {
+        // WebSocket-based injection via --remote-debugging-port=8080
+        // The tier0 hook injects this flag into steamwebhelper only,
+        // so we don't need --cef-enable-debugging on the main Steam process
         std::string host;
         int port = 0;
         std::string path;
@@ -393,6 +397,222 @@ namespace CDPInject
         return true;
     }
 
+    /**
+     * Helper: send a CDP command and read frames until we get the response
+     * with the matching ID, or timeout after maxFrames attempts.
+     */
+    static std::string cdpSendAndRecv(int sock, int id, const std::string& payload, int maxFrames = 30)
+    {
+        if (!wsSendText(sock, payload)) return {};
+
+        std::string idStr = "\"id\":" + std::to_string(id);
+        for (int i = 0; i < maxFrames; i++)
+        {
+            std::string frame = wsRecvFrame(sock);
+            if (frame.empty()) break;
+            if (frame.find(idStr) != std::string::npos)
+                return frame;
+        }
+        return {};
+    }
+
+    int downloadViaPage(const std::string& url, const std::string& destPath)
+    {
+        // 1. Find a suitable Steam browser page to use
+        auto pages = fetchPages();
+        std::string wsUrl;
+        std::string originalUrl;
+        for (auto& page : pages)
+        {
+            if (!page.webSocketDebuggerUrl.empty() &&
+                page.url.find("steampowered.com") != std::string::npos)
+            {
+                wsUrl = page.webSocketDebuggerUrl;
+                originalUrl = page.url;
+                break;
+            }
+        }
+        if (wsUrl.empty())
+        {
+            g_pLog->debug("CDPInject::downloadViaPage: No suitable Steam page found\n");
+            return -1;
+        }
+
+        // 2. Connect WebSocket with long timeout
+        std::string host;
+        int port = 0;
+        std::string path;
+        if (!parseWsUrl(wsUrl, host, port, path)) return -1;
+
+        int sock = tcpConnect(host.c_str(), port, 30);
+        if (sock < 0) return -1;
+
+        struct timeval tv;
+        tv.tv_sec = 45;
+        tv.tv_usec = 0;
+        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+        std::string wsKey = generateWsKey();
+        if (!wsHandshake(sock, host, port, path, wsKey))
+        {
+            close(sock);
+            return -1;
+        }
+
+        // 3. Extract base URL (scheme + host) from the download URL
+        std::string baseUrl;
+        {
+            size_t p = url.find("://");
+            if (p != std::string::npos)
+            {
+                size_t end = url.find('/', p + 3);
+                baseUrl = url.substr(0, end != std::string::npos ? end : url.size());
+            }
+        }
+        if (baseUrl.empty()) { close(sock); return -1; }
+
+        g_pLog->debug("CDPInject::downloadViaPage: Navigating to %s for same-origin context\n", baseUrl.c_str());
+
+        // 4. Navigate to the API domain to establish same-origin context
+        {
+            std::string navPayload = R"({"id":10,"method":"Page.navigate","params":{"url":")" + baseUrl + R"(/"}})";
+            cdpSendAndRecv(sock, 10, navPayload);
+        }
+
+        // Wait for page load + potential Cloudflare challenge
+        sleep(6);
+
+        // 5. Inject fetch() JS — same-origin so no CORS issues
+        //    Returns "OK:<status>:<base64data>" on success, "ERR:<status>" on failure
+        //    We escape single quotes in the URL just in case
+        std::string safeUrl = url;
+        for (size_t i = 0; i < safeUrl.size(); ++i)
+        {
+            if (safeUrl[i] == '\'' || safeUrl[i] == '\\')
+            {
+                safeUrl.insert(i, "\\");
+                ++i;
+            }
+        }
+
+        std::string fetchJs =
+            "(async function(){"
+            "try{"
+            "var r=await fetch('" + safeUrl + "');"
+            "var s=r.status;"
+            "if(!r.ok)return 'ERR:'+s;"
+            "var b=await r.arrayBuffer();"
+            "var u=new Uint8Array(b);"
+            "var c='';"
+            "var K=8192;"
+            "for(var i=0;i<u.length;i+=K){"
+            "c+=String.fromCharCode.apply(null,u.subarray(i,Math.min(i+K,u.length)));"
+            "}"
+            "return 'OK:'+s+':'+btoa(c);"
+            "}catch(e){"
+            "return 'ERR:-1:'+e.message;"
+            "}"
+            "})()";
+
+        // Escape for JSON embedding
+        std::string escapedJs;
+        escapedJs.reserve(fetchJs.size() + 64);
+        for (char c : fetchJs)
+        {
+            switch (c)
+            {
+                case '"':  escapedJs += "\\\""; break;
+                case '\\': escapedJs += "\\\\"; break;
+                case '\n': escapedJs += "\\n"; break;
+                case '\r': escapedJs += "\\r"; break;
+                case '\t': escapedJs += "\\t"; break;
+                default:   escapedJs += c; break;
+            }
+        }
+
+        std::string evalPayload = R"({"id":11,"method":"Runtime.evaluate","params":{"expression":")" + escapedJs + R"(","awaitPromise":true}})";
+
+        g_pLog->debug("CDPInject::downloadViaPage: Injecting fetch JS...\n");
+        std::string response = cdpSendAndRecv(sock, 11, evalPayload, 60);
+
+        // 6. Navigate back to the original page
+        {
+            // Escape the originalUrl for JSON
+            std::string safeOrig;
+            for (char c : originalUrl)
+            {
+                if (c == '"') safeOrig += "\\\"";
+                else if (c == '\\') safeOrig += "\\\\";
+                else safeOrig += c;
+            }
+            std::string navBack = R"({"id":12,"method":"Page.navigate","params":{"url":")" + safeOrig + R"("}})";
+            wsSendText(sock, navBack);
+            // Don't wait for response, just fire and forget
+        }
+
+        close(sock);
+
+        if (response.empty())
+        {
+            g_pLog->debug("CDPInject::downloadViaPage: No response from fetch JS\n");
+            return -1;
+        }
+
+        // 7. Parse the result from CDP response
+        //    Response: {"id":11,"result":{"result":{"type":"string","value":"OK:200:base64..."}}}
+        std::string value = jsonGetString(response, "value");
+        if (value.empty())
+        {
+            g_pLog->debug("CDPInject::downloadViaPage: Empty value in CDP response\n");
+            return -1;
+        }
+
+        if (value.rfind("ERR:", 0) == 0)
+        {
+            // Parse error status
+            int errStatus = -1;
+            try { errStatus = std::stoi(value.substr(4)); } catch (...) {}
+            g_pLog->debug("CDPInject::downloadViaPage: Fetch returned error: %s\n", value.c_str());
+            return errStatus;
+        }
+
+        if (value.rfind("OK:", 0) != 0)
+        {
+            g_pLog->debug("CDPInject::downloadViaPage: Unexpected value: %.100s\n", value.c_str());
+            return -1;
+        }
+
+        // Parse "OK:<status>:<base64data>"
+        size_t firstColon = value.find(':', 3);
+        if (firstColon == std::string::npos) return -1;
+
+        int httpStatus = 200;
+        try { httpStatus = std::stoi(value.substr(3, firstColon - 3)); } catch (...) {}
+
+        std::string b64data = value.substr(firstColon + 1);
+        if (b64data.empty())
+        {
+            g_pLog->debug("CDPInject::downloadViaPage: Empty base64 data\n");
+            return httpStatus;
+        }
+
+        // 8. Decode base64 and write to file
+        std::string decoded = base64::from_base64(b64data);
+
+        FILE* fp = fopen(destPath.c_str(), "wb");
+        if (!fp)
+        {
+            g_pLog->debug("CDPInject::downloadViaPage: Cannot open dest file %s\n", destPath.c_str());
+            return -1;
+        }
+        fwrite(decoded.data(), 1, decoded.size(), fp);
+        fclose(fp);
+
+        g_pLog->info("CDPInject::downloadViaPage: Downloaded %zu bytes (HTTP %d) -> %s\n",
+                     decoded.size(), httpStatus, destPath.c_str());
+        return httpStatus;
+    }
+
     void injectStorePages()
     {
         auto pages = fetchPages();
@@ -411,6 +631,79 @@ namespace CDPInject
 
     var observer = null;
     var debounceTimer = null;
+
+    // Cache of app unlock status: { appid: true/false }
+    var appUnlockStatus = {};
+
+    function setupDownloadButton(luaLink, luaBtn, productID) {
+        var span = luaLink.querySelector('span');
+        if (span) span.innerText = 'Download Lua';
+        luaLink.style.filter = 'hue-rotate(110deg) brightness(1.2)';
+        luaLink.style.pointerEvents = '';
+        luaLink.style.opacity = '';
+        luaLink.onclick = function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            var clickSpan = luaLink.querySelector('span');
+            if (clickSpan) clickSpan.innerText = 'Downloading...';
+            luaLink.style.filter = 'hue-rotate(50deg) brightness(1.0)';
+            luaLink.style.pointerEvents = 'none';
+            luaLink.style.opacity = '0.8';
+            luaBtn.dataset.slsAppid = productID;
+            ping('Lua Click: ' + productID);
+            window.location.hash = 'sls-click-' + productID + '-' + Date.now();
+        };
+    }
+
+    function setupRemoveButton(luaLink, luaBtn, productID) {
+        var span = luaLink.querySelector('span');
+        if (span) span.innerText = 'Remove Lua';
+        luaLink.style.filter = 'hue-rotate(320deg) brightness(1.1)';
+        luaLink.style.pointerEvents = '';
+        luaLink.style.opacity = '';
+        luaLink.onclick = function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+
+            // Show confirmation modal
+            if (document.getElementById('sls-remove-overlay')) return;
+            var overlay = document.createElement('div');
+            overlay.id = 'sls-remove-overlay';
+            overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:999999;display:flex;justify-content:center;align-items:center;backdrop-filter:blur(5px);';
+            overlay.innerHTML = '<div style="background:#1a1c23;border:1px solid #2a2d36;border-radius:12px;padding:30px;width:400px;box-shadow:0 15px 30px rgba(0,0,0,0.5);font-family:Inter,sans-serif;color:#fff;text-align:center;">' +
+                '<h2 style="margin:0 0 10px;font-size:20px;font-weight:600;color:#e8e9eb;">Remove Lua</h2>' +
+                '<p style="margin:0 0 20px;font-size:13px;color:#8a8d96;">Remove Lua and Game files for AppID <b>' + productID + '</b>?</p>' +
+                '<div style="display:flex;justify-content:center;gap:10px;">' +
+                    '<button id="sls-rm-cancel" style="background:transparent;border:1px solid #333640;color:#e8e9eb;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;">Cancel</button>' +
+                    '<button id="sls-rm-confirm" style="background:#ff4d4d;border:none;color:#fff;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;box-shadow:0 4px 10px rgba(255,77,77,0.3);">Remove</button>' +
+                '</div>' +
+            '</div>';
+            document.body.appendChild(overlay);
+
+            document.getElementById('sls-rm-cancel').onclick = function() { overlay.remove(); };
+            document.getElementById('sls-rm-confirm').onclick = function() {
+                var confirmBtn = document.getElementById('sls-rm-confirm');
+                confirmBtn.innerText = 'Processing...';
+                confirmBtn.style.opacity = '0.5';
+                confirmBtn.style.pointerEvents = 'none';
+
+                ping('Remove Lua: ' + productID);
+                window.location.hash = 'sls-click-removelua-' + productID + '-' + Date.now();
+
+                // Update cached status
+                appUnlockStatus[productID] = false;
+
+                overlay.innerHTML = '<div style="background:#1a1c23;border:1px solid #2a2d36;border-radius:12px;padding:30px;width:400px;box-shadow:0 15px 30px rgba(0,0,0,0.5);font-family:Inter,sans-serif;color:#fff;text-align:center;">' +
+                    '<h2 style="margin:0 0 10px;font-size:20px;font-weight:600;color:#5cb85c;">Removed Successfully!</h2>' +
+                    '<p style="margin:0;font-size:13px;color:#8a8d96;">Restart Steam for changes to take effect.</p>' +
+                '</div>';
+                setTimeout(function() { overlay.remove(); }, 3000);
+
+                // Switch button back to Download Lua
+                setupDownloadButton(luaLink, luaBtn, productID);
+            };
+        };
+    }
 
     function addButtons() {
         if (observer) observer.disconnect();
@@ -440,23 +733,33 @@ namespace CDPInject
                 if (luaLink) {
                     luaLink.href = 'javascript:void(0)';
                     luaLink.removeAttribute('id');
-                    var span = luaLink.querySelector('span');
-                    if (span) span.innerText = 'Download Lua';
-                    luaLink.style.filter = 'hue-rotate(110deg) brightness(1.2)';
-                    luaLink.onclick = function(e) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        // Immediate visual feedback
-                        var clickSpan = luaLink.querySelector('span');
-                        if (clickSpan) clickSpan.innerText = '⏳ Downloading...';
-                        luaLink.style.filter = 'hue-rotate(50deg) brightness(1.0)';
-                        luaLink.style.pointerEvents = 'none';
-                        luaLink.style.opacity = '0.8';
-                        // Store appid on the button for status updates from C++
-                        luaBtn.dataset.slsAppid = productID;
-                        ping('Lua Click: ' + productID);
-                        window.location.hash = 'sls-click-' + productID + '-' + Date.now();
-                    };
+
+                    // Default to Download Lua, then check if already unlocked
+                    setupDownloadButton(luaLink, luaBtn, productID);
+
+                    // Check unlock status via callback server
+                    if (appUnlockStatus[productID] !== undefined) {
+                        // Use cached status
+                        if (appUnlockStatus[productID]) {
+                            setupRemoveButton(luaLink, luaBtn, productID);
+                        }
+                    } else {
+                        // Query the server
+                        (function(ll, lb, pid) {
+                            fetch('http://127.0.0.1:9001/check?id=' + pid)
+                                .then(function(r) { return r.json(); })
+                                .then(function(data) {
+                                    var isUnlocked = data.exists || data.pending;
+                                    appUnlockStatus[pid] = isUnlocked;
+                                    if (isUnlocked) {
+                                        setupRemoveButton(ll, lb, pid);
+                                    }
+                                })
+                                .catch(function() {
+                                    ping('Check failed for ' + pid + ', defaulting to Download');
+                                });
+                        })(luaLink, luaBtn, productID);
+                    }
                 }
                 cartBtn.parentNode.insertBefore(luaBtn, cartBtn.nextSibling);
                 // Settings button
@@ -471,7 +774,7 @@ namespace CDPInject
                     setLink.href = 'javascript:void(0)';
                     setLink.removeAttribute('id');
                     var spanSet = setLink.querySelector('span');
-                    if (spanSet) spanSet.innerText = '⚙️';
+                    if (spanSet) spanSet.innerText = 'Settings';
                     setLink.style.filter = 'hue-rotate(200deg) brightness(1.1)';
                     setLink.style.padding = '0 10px';
                     setLink.onclick = function(e) {
@@ -492,16 +795,16 @@ namespace CDPInject
         overlay.id = 'sls-overlay-modal';
         overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:999999;display:flex;justify-content:center;align-items:center;backdrop-filter:blur(5px);';
         overlay.innerHTML = '<div style="background:#1a1c23;border:1px solid #2a2d36;border-radius:12px;padding:30px;width:450px;box-shadow:0 15px 30px rgba(0,0,0,0.5);font-family:Inter,sans-serif;color:#fff;">' +
-            '<h2 style="margin:0 0 10px;font-size:20px;font-weight:600;color:#e8e9eb;">⚙️ API Settings</h2>' +
+            '<h2 style="margin:0 0 10px;font-size:20px;font-weight:600;color:#e8e9eb;">API Settings</h2>' +
             '<p style="margin:0 0 20px;font-size:13px;color:#8a8d96;">Configure your credentials for 3rd-party download APIs.</p>' +
             '<label style="display:flex;justify-content:space-between;margin-bottom:8px;font-size:12px;font-weight:500;color:#b4b6bc;">' +
             '<span>Morrenus API Key</span>' +
-            '<a href="https://manifest.morrenus.xyz/api-keys/stats" target="_blank" style="color:#007bff;text-decoration:none;cursor:pointer;">Get Key \u2197</a>' +
+            '<a href="https://manifest.morrenus.xyz/api-keys/stats" target="_blank" style="color:#007bff;text-decoration:none;cursor:pointer;">Get Key</a>' +
             '</label>' +
             '<input id="sls-morr" type="text" value="%MORR_KEY%" style="width:100%;box-sizing:border-box;background:#0d0e12;border:1px solid #333640;color:#fff;padding:10px 12px;border-radius:6px;margin-bottom:15px;font-family:monospace;font-size:13px;outline:none;" placeholder="Optional..."/>' +
             '<label style="display:flex;justify-content:space-between;margin-bottom:8px;font-size:12px;font-weight:500;color:#b4b6bc;">' +
             '<span>Ryuu API Key</span>' +
-            '<a href="https://generator.ryuu.lol/" target="_blank" style="color:#007bff;text-decoration:none;cursor:pointer;">Get Key \u2197</a>' +
+            '<a href="https://generator.ryuu.lol/" target="_blank" style="color:#007bff;text-decoration:none;cursor:pointer;">Get Key</a>' +
             '</label>' +
             '<input id="sls-ryuu" type="text" value="%RYUU_KEY%" style="width:100%;box-sizing:border-box;background:#0d0e12;border:1px solid #333640;color:#fff;padding:10px 12px;border-radius:6px;margin-bottom:25px;font-family:monospace;font-size:13px;outline:none;" placeholder="Optional..."/>' +
             '<div style="display:flex;justify-content:flex-end;gap:10px;">' +
@@ -520,7 +823,7 @@ namespace CDPInject
             
             // Brief success toast
             var toast = document.createElement('div');
-            toast.innerText = '✅ API Settings Saved!';
+            toast.innerText = 'API Settings Saved!';
             toast.style.cssText = 'position:fixed;bottom:30px;right:30px;background:#28a745;color:#fff;padding:12px 20px;border-radius:8px;font-family:Inter,sans-serif;font-weight:500;z-index:999999;box-shadow:0 5px 15px rgba(0,0,0,0.3);transition:opacity 0.5s;';
             document.body.appendChild(toast);
             setTimeout(function(){ toast.style.opacity = '0'; }, 2000);
@@ -550,16 +853,10 @@ namespace CDPInject
             storePageScript.replace(pos, 10, morrKey);
         if ((pos = storePageScript.find("%RYUU_KEY%")) != std::string::npos)
             storePageScript.replace(pos, 10, ryuuKey);
-
         for (auto& page : pages)
         {
-            if (page.webSocketDebuggerUrl.empty()) continue;
-
-            // Filter for Steam store pages: /app/ or /sub/
-            if (page.url.find("steampowered.com/app/") != std::string::npos ||
-                page.url.find("steampowered.com/sub/") != std::string::npos)
+            if (page.url.find("store.steampowered.com") != std::string::npos && !page.webSocketDebuggerUrl.empty())
             {
-                g_pLog->debug("CDPInject: Injecting into: %s (%s)\n", page.title.c_str(), page.url.c_str());
                 injectJS(page.webSocketDebuggerUrl, storePageScript);
             }
         }

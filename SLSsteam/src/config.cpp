@@ -190,6 +190,7 @@ bool CConfig::loadSettings()
 	morrenusKey = getSetting<std::string>(node, "MorrenusKey", "");
 	ryuuKey = getSetting<std::string>(node, "RyuuKey", "");
 
+
 	//TODO: Create smart logging function to log them automatically via getSetting
 	g_pLog->info("DisableFamilyShareLock: %i\n", disableFamilyLock.get());
 	g_pLog->info("UseWhitelist: %i\n", useWhiteList.get());
@@ -533,7 +534,130 @@ bool CConfig::addAdditionalAppId(uint32_t appId)
 	}
 
 	g_pLog->info("addAdditionalAppId: Appended AppID %u to AdditionalApps in %s\n", appId, configPath.c_str());
-	// CFileWatcher will detect the change and trigger loadSettings() automatically
+	
+	// Update memory set immediately for hooks
+	auto current = addedAppIds.get();
+	current.insert(appId);
+	addedAppIds = current;
+	
+	return true;
+}
+
+bool CConfig::removeAdditionalAppId(uint32_t appId)
+{
+	const std::string configPath = getPath();
+
+	// 1. Read config.yaml line by line
+	std::ifstream inFile(configPath);
+	if (!inFile.is_open())
+	{
+		g_pLog->info("removeAdditionalAppId: Cannot open config at %s\n", configPath.c_str());
+		return false;
+	}
+
+	std::vector<std::string> lines;
+	std::string line;
+	while (std::getline(inFile, line))
+	{
+		lines.push_back(line);
+	}
+	inFile.close();
+
+	// 2. Find the AdditionalApps: section and remove the line
+	bool inAdditionalApps = false;
+	bool removed = false;
+	std::vector<std::string> newLines;
+
+	for (const auto& l : lines)
+	{
+		if (!inAdditionalApps)
+		{
+			if (l.find("AdditionalApps:") != std::string::npos
+				&& !l.empty() && l[0] != '#' && l[0] != ' ' && l[0] != '\t')
+			{
+				inAdditionalApps = true;
+			}
+			newLines.push_back(l);
+		}
+		else
+		{
+			if (!l.empty() && l[0] != ' ' && l[0] != '\t' && l[0] != '#')
+			{
+				inAdditionalApps = false;
+				newLines.push_back(l);
+				continue;
+			}
+
+			size_t dashPos = l.find("- ");
+			if (dashPos != std::string::npos)
+			{
+				bool leadingWS = true;
+				for (size_t i = 0; i < dashPos; ++i)
+				{
+					if (l[i] != ' ' && l[i] != '\t') { leadingWS = false; break; }
+				}
+				if (leadingWS)
+				{
+					std::string val = l.substr(dashPos + 2);
+					size_t cmt = val.find('#');
+					if (cmt != std::string::npos) val = val.substr(0, cmt);
+					while (!val.empty() && (val.back() == ' ' || val.back() == '\t')) val.pop_back();
+					try
+					{
+						if (static_cast<uint32_t>(std::stoul(val)) == appId)
+						{
+							g_pLog->info("removeAdditionalAppId: Found AppID %u, removing line\n", appId);
+							removed = true;
+							continue; // Skip this line
+						}
+					}
+					catch (...) {}
+				}
+			}
+			newLines.push_back(l);
+		}
+	}
+
+	if (!removed)
+	{
+		g_pLog->info("removeAdditionalAppId: AppID %u not found in AdditionalApps\n", appId);
+		return false;
+	}
+
+	// 3. Write atomically
+	std::string tmpPath = configPath + ".tmp";
+	std::ofstream outFile(tmpPath);
+	if (!outFile.is_open())
+	{
+		g_pLog->info("removeAdditionalAppId: Cannot write temp file at %s\n", tmpPath.c_str());
+		return false;
+	}
+
+	for (size_t i = 0; i < newLines.size(); ++i)
+	{
+		outFile << newLines[i];
+		if (i + 1 < newLines.size())
+			outFile << '\n';
+	}
+	outFile.close();
+
+	if (std::rename(tmpPath.c_str(), configPath.c_str()) != 0)
+	{
+		g_pLog->info("removeAdditionalAppId: Failed to rename temp file to %s\n", configPath.c_str());
+		std::remove(tmpPath.c_str());
+		return false;
+	}
+
+	g_pLog->info("removeAdditionalAppId: Removed AppID %u from AdditionalApps in %s\n", appId, configPath.c_str());
+
+	// Update memory set immediately for hooks
+	auto current = addedAppIds.get();
+	if (current.erase(appId) > 0)
+	{
+		addedAppIds = current;
+		g_pLog->info("removeAdditionalAppId: Updated memory set for AppID %u\n", appId);
+	}
+
 	return true;
 }
 
@@ -548,6 +672,7 @@ bool CConfig::updateApiAuth(const std::string& newMorrenus, const std::string& n
 	bool foundMorrenus = false;
 	bool foundRyuu = false;
 
+
 	while (std::getline(inFile, line))
 	{
 		if (line.find("MorrenusKey:") == 0)
@@ -560,6 +685,10 @@ bool CConfig::updateApiAuth(const std::string& newMorrenus, const std::string& n
 			lines.push_back("RyuuKey: \"" + newRyuu + "\"");
 			foundRyuu = true;
 		}
+		else if (line.find("RyuuCookies:") == 0)
+		{
+			continue; // Skip old RyuuCookies line (deprecated)
+		}
 		else
 		{
 			lines.push_back(line);
@@ -569,6 +698,7 @@ bool CConfig::updateApiAuth(const std::string& newMorrenus, const std::string& n
 
 	if (!foundMorrenus) lines.push_back("MorrenusKey: \"" + newMorrenus + "\"");
 	if (!foundRyuu) lines.push_back("RyuuKey: \"" + newRyuu + "\"");
+
 
 	std::string tmpPath = configPath + ".tmp";
 	std::ofstream outFile(tmpPath);
@@ -679,6 +809,25 @@ void scanLuaPluginsAndUpdateConfig()
 		{
 			g_pLog->debug("scanLuaPluginsAndUpdateConfig: AppID %u already in AdditionalApps, skipping\n", appId);
 		}
+	}
+
+	// 6. Remove AppIDs that are in config but NO LONGER on disk
+	std::vector<uint32_t> toRemove;
+	{
+		auto currentAdded = g_config.addedAppIds.get();
+		for (uint32_t appId : currentAdded)
+		{
+			if (collectedAppIds.find(appId) == collectedAppIds.end())
+			{
+				toRemove.push_back(appId);
+			}
+		}
+	}
+
+	for (uint32_t appId : toRemove)
+	{
+		g_pLog->info("scanLuaPluginsAndUpdateConfig: Removing stale AppID %u from AdditionalApps\n", appId);
+		g_config.removeAdditionalAppId(appId);
 	}
 
 	g_pLog->info("scanLuaPluginsAndUpdateConfig: Scan complete, processed %zu Lua plugin(s)\n", collectedAppIds.size());

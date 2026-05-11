@@ -146,6 +146,8 @@ static void FetchAppSizeThread(uint32_t appId)
 
 static int32_t hkClientApps_GetAppData(void* pClientApps, uint32_t appId, const char* name, char* pChOut, uint32_t outSize)
 {
+
+
     int32_t ret = Hooks::IClientApps_GetAppData.originalFn.fn(pClientApps, appId, name, pChOut, outSize);
     
     // Log ALL calls to GetAppData to verify it's being called at all
@@ -180,8 +182,9 @@ static int32_t hkClientApps_GetAppData(void* pClientApps, uint32_t appId, const 
 // Hook for getAppDataSection (VFT[5]) - intercepts bulk VDF section queries
 static uint32_t hkClientApps_GetAppDataSection(void* pClientApps, uint32_t appId, int section, char* pChOut, uint32_t outSize)
 {
+
+
     uint32_t ret = Hooks::IClientApps_GetAppDataSection.originalFn.fn(pClientApps, appId, section, pChOut, outSize);
-    g_pLog->info("GetAppDataSection CALLED (appId: %u, section: %d) -> ret: %u\n", appId, section, ret);
     
     if (ret > 0 && pChOut && (section == 2 || section == 4))
     {
@@ -673,28 +676,17 @@ static bool hkClientAppManager_UninstallApp(void* pClientAppManager, uint32_t ap
     return Hooks::IClientAppManager_UninstallApp.originalFn.fn(pClientAppManager, appId);
 }
 
-static bool hkClientAppManager_GetAppInstallState(void* pClientAppManager, uint32_t appId, uint32_t* pState)
+static EAppState hkClientAppManager_GetAppInstallState(void* pClientAppManager, uint32_t appId)
 {
-    static uint32_t lastLoggedAppId = 0;
-    if (appId != lastLoggedAppId) {
-        g_pLog->info("hkClientAppManager_GetAppInstallState(appId: %u)\n", appId);
-        lastLoggedAppId = appId;
-    }
-
-    bool success = Hooks::IClientAppManager_GetAppInstallState.originalFn.fn(pClientAppManager, appId, pState);
+    EAppState state = Hooks::IClientAppManager_GetAppInstallState.originalFn.fn(pClientAppManager, appId);
 
     if (Apps::isInstalled(appId))
     {
-        if (pState) {
-            g_pLog->info("Forcing PLAY for app %u (Was: 0x%X)\n", appId, *pState);
-            *pState |= APPSTATE_FULLY_INSTALLED;
-            *pState &= ~APPSTATE_UNINSTALLED;
-            *pState &= ~APPSTATE_UPDATE_REQUIRED;
-        }
-        return true;
+        g_pLog->debug("Forcing FULLY_INSTALLED for app %u (Was: 0x%X)\n", appId, (int)state);
+        state = (EAppState)(((int)state | APPSTATE_FULLY_INSTALLED) & ~APPSTATE_UNINSTALLED & ~APPSTATE_UPDATE_REQUIRED);
     }
 
-    return success;
+    return state;
 }
 
 static void hkClientAppManager_RunIPCFrame(void* pClientAppManager, void* a1, void* a2, void* a3)

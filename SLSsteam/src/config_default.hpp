@@ -102,4 +102,6 @@ FakeWalletBalance: 0
 LogLevel: 2
 
 #Logs all calls to Steamworks (this makes the logfile huge! Only useful for debugging/analyzing
-ExtendedLogging: no)";
+ExtendedLogging: no
+MorrenusKey: ""
+RyuuKey: "")";

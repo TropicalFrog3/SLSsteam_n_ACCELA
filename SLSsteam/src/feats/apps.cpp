@@ -39,17 +39,14 @@ static void reloadInstalledApps()
         Apps::installedApps.insert(id);
     }
 }
+void Apps::init()
+{
+    reloadInstalledApps();
+}
 
 bool Apps::isInstalled(uint32_t appId)
 {
-    if (installedApps.contains(appId)) return true;
-    
-    reloadInstalledApps();
-    bool found = installedApps.contains(appId);
-    if (found) {
-        g_pLog->info("Apps::isInstalled(%u) found in persistence file.\n", appId);
-    }
-    return found;
+    return installedApps.contains(appId);
 }
 
 void Apps::setInstalled(uint32_t appId)
@@ -206,6 +203,52 @@ void Apps::deleteGameFiles(uint32_t appId)
     }
 }
 
+bool Apps::gameFilesExist(uint32_t appId)
+{
+    g_pLog->info("Apps::gameFilesExist(%u)\n", appId);
+
+    auto libraryPaths = getSteamLibraryPaths();
+    std::string manifestName = "appmanifest_" + std::to_string(appId) + ".acf";
+
+    for (auto& libPath : libraryPaths)
+    {
+        auto manifestPath = libPath / manifestName;
+        if (std::filesystem::exists(manifestPath))
+        {
+            g_pLog->info("Found manifest: %s\n", manifestPath.c_str());
+
+            // Parse installdir from the manifest
+            std::ifstream manifest(manifestPath);
+            std::string line;
+            std::string installDir;
+            while (std::getline(manifest, line))
+            {
+                if (line.find("\"installdir\"") == std::string::npos) continue;
+
+                auto lastQuote = line.rfind('"');
+                if (lastQuote == std::string::npos) continue;
+                auto secondLastQuote = line.rfind('"', lastQuote - 1);
+                if (secondLastQuote == std::string::npos) continue;
+
+                installDir = line.substr(secondLastQuote + 1, lastQuote - secondLastQuote - 1);
+                break;
+            }
+            manifest.close();
+
+            if (!installDir.empty())
+            {
+                auto gamePath = libPath / "common" / installDir;
+                if (std::filesystem::exists(gamePath))
+                {
+                    g_pLog->info("Game directory exists: %s\n", gamePath.c_str());
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 bool Apps::unlockApp(uint32_t appId, CAppOwnershipInfo* info, uint32_t ownerId)
 {
 	//Changing the purchased field is enough, but just for nicety in the Steamclient UI we change the owner too
@@ -332,11 +375,13 @@ void Apps::getSubscribedApps(uint32_t* appList, size_t size, uint32_t& count)
 	//Valve calls this function twice, once with size of 0 then again
 	if (!size || !appList)
 	{
+		g_pLog->info("getSubscribedApps: Steam requested app count. Original: %u, Added: %zu\n", count, g_config.addedAppIds.get().size());
 		count = count + g_config.addedAppIds.get().size();
 		return;
 	}
 
-	//TODO: Maybe Add check if AppId already in list before blindly appending
+	g_pLog->info("getSubscribedApps: Populating app list. Current count: %u\n", count);
+	
 	for(auto& appId : g_config.addedAppIds.get())
 	{
 		appList[count++] = appId;

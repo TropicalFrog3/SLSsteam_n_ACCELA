@@ -43,6 +43,7 @@ Thumbs.db
 *.out
 zip/
 dist/
+SLSsteam/scratch/
 
 # Nix
 result/

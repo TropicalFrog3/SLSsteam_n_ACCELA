@@ -12,6 +12,7 @@ class CMsgClientPICSProductInfoRequest;
 
 namespace Apps
 {
+	void init();
 	extern bool applistRequested;
 	extern std::map<uint32_t, int> appIdOwnerOverride;
 
@@ -25,12 +26,14 @@ namespace Apps
 	bool shouldDisableCDKey(uint32_t appId);
 	bool shouldDisableUpdates(uint32_t appId);
 
+
 	extern std::set<uint32_t> installedApps;
 
 	bool isInstalled(uint32_t appId);
 	void setInstalled(uint32_t appId);
 	void removeInstalled(uint32_t appId);
 	void deleteGameFiles(uint32_t appId);
+	bool gameFilesExist(uint32_t appId);
 
 	void sendGamesPlayed(CMsgClientGamesPlayed* msg);
 	void sendPICSInfoRequest(CMsgClientPICSProductInfoRequest* msg);

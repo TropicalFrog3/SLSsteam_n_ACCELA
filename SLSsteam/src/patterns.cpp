@@ -29,6 +29,11 @@ Pattern_t::Pattern_t(const char* name, const char* pattern, MemHlp::SigFollowMod
 bool Pattern_t::find()
 {
 	address = MemHlp::searchSignature(name.c_str(), pattern.c_str(), module ? *module : g_modSteamClient , followMode, &prologue[0], prologue.size());
+	if (address == LM_ADDRESS_BAD && name == "CAPIJob::GetPlayerStats")
+	{
+		g_pLog->info("Trying fallback pattern for CAPIJob::GetPlayerStats\n");
+		address = MemHlp::searchSignature(name.c_str(), "E8 ? ? ? ? 83 C4 10 89 C5 E9 ? ? ? ? C7 86 ? ? ? ? 00 00 00 00", module ? *module : g_modSteamClient , followMode, &prologue[0], prologue.size());
+	}
 	return address != LM_ADDRESS_BAD;
 }
 
@@ -40,6 +45,7 @@ bool Patterns::init()
 	{
 		if (!pattern->find())
 		{
+			g_pLog->warn("Failed to find pattern: %s\n", pattern->name.c_str());
 			found = false;
 		}
 	}
@@ -263,7 +269,7 @@ namespace Patterns
 		Pattern_t RunIPCFrame
 		{
 			"IClientUGC::RunIPCFrame",
-			"E8 ? ? ? ? 8B 85 ? ? ? ? 83 C4 10 3D 1B 0C D2 71",
+			"E8 ? ? ? ? 8B 85 ? ? ? ? 83 C4 10 3D ? 0C D2 71",
 			SigFollowMode::PrologueUpwards,
 			std::vector<uint8_t> { 0x56, 0x57, 0xe5, 0x89, 0x55 }
 		};

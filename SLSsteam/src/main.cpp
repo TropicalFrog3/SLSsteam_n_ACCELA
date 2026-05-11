@@ -8,6 +8,9 @@
 #include "utils.hpp"
 #include "feats/cefsizefix.hpp"
 #include "feats/storeinject.hpp"
+#include "feats/apps.hpp"
+#include "feats/removelua.hpp"
+#include "feats/tier0hook.hpp"
 
 #include "libmem/libmem.h"
 #include <curl/curl.h>
@@ -68,6 +71,7 @@ static bool cleanEnvVar(const char* varName, const char* endsWith)
 //__attribute__((noreturn))
 static void unload()
 {
+	Tier0Hook::remove();
 	CefSizeFix::removeSizeFixScript();
 	StoreInject::shutdown();
 	Hooks::remove();
@@ -208,13 +212,27 @@ static void load()
 		return;
 	}
 
+	Apps::init();
 	SLSAPI::init();
+
+	// Install the tier0 hook to intercept steamwebhelper launch
+	// This replaces --cef-enable-debugging with --remote-debugging-pipe
+	// Must be done early so it catches the next steamwebhelper spawn
+	if (Tier0Hook::install()) {
+		g_pLog->info("Tier0 hook installed - steamwebhelper will use pipe-based CDP\n");
+	} else {
+		g_pLog->warn("Tier0 hook failed - falling back to port-based CDP\n");
+	}
 
 	// Inject the CEF size fix script into Steam's UI
 	CefSizeFix::injectSizeFixScript();
 
-	// Start the Store injection background thread
+	// Start the Store injection background thread (callback server on port 9001)
+	// MUST start before RemoveLua injection, because the JS depends on the /check API
 	StoreInject::init();
+
+	// Inject the Remove Lua button script (needs port 9001 to be listening)
+	RemoveLua::injectRemoveLuaScript();
 
 	if (g_config.notifyInit.get())
 	{
@@ -243,6 +261,15 @@ unsigned int la_objopen(struct link_map *map, __attribute__((unused)) Lmid_t lmi
 	if (std::string(map->l_name).ends_with("/steamclient.so") || std::string(map->l_name).ends_with("/steamui.so"))
 	{
 		load();
+	}
+
+	// Retry tier0 hook when libtier0_s.so is loaded (it may load after steamclient.so)
+	if (setupSuccess && std::string(map->l_name).ends_with("/libtier0_s.so"))
+	{
+		if (!Tier0Hook::isHookInstalled() && Tier0Hook::install())
+		{
+			g_pLog->info("Tier0 hook installed via la_objopen (libtier0_s.so just loaded)\n");
+		}
 	}
 
 	return 0;

@@ -54,6 +54,10 @@ static std::string generateSizeFixJS()
     window.__slsInjected = true;
 
     var sizeCache = {};
+    try {
+        var stored = localStorage.getItem('sls_sizeCache');
+        if (stored) sizeCache = JSON.parse(stored);
+    } catch(e) {}
     var pendingFetches = {};
 
     function fetchAppSize(appId) {
@@ -113,6 +117,9 @@ static std::string generateSizeFixJS()
                     console.warn('[SLS] Failed to parse size for app ' + appId + ':', e);
                 }
                 sizeCache[appId] = totalSize;
+                if (totalSize > 0) {
+                    try { localStorage.setItem('sls_sizeCache', JSON.stringify(sizeCache)); } catch(e) {}
+                }
                 resolve(totalSize);
                 if (pendingFetches[appId]) {
                     pendingFetches[appId].forEach(function(cb) { cb(totalSize); });

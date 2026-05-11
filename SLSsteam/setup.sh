@@ -43,7 +43,7 @@ install_wrapper()
 		return 0
 	fi
 
-	if [[ $? -ne 0 ]]; then
+	if [ $? -ne 0 ]; then
 		echo "$EXE not found in path! Skipping"
 		return 1
 	fi
@@ -70,14 +70,14 @@ install_desktop_file()
 
 	if [ ! -d "$USR_APP_DIR" ]; then
 		mkdir "$USR_APP_DIR"
-		if [[ $? -ne 0 ]]; then
+		if [ $? -ne 0 ]; then
 			echo "Failed to create $USR_APP_DIR! Aborting .desktop creation"
 			return 1
 		fi
 	fi
 
 	cp "$APP_DIR/$NAME" "$USR_APP_DIR/"
-	sed -i "s|^Exec=/|Exec=env $SLSAUDIT /|" "$USR_APP_DIR/$NAME"
+	sed -i "/^Exec=/ { s|^Exec=/|Exec=env $SLSAUDIT /| }" "$USR_APP_DIR/$NAME"
 
 	echo "Created $USR_APP_DIR/$NAME"
 }
@@ -115,7 +115,7 @@ install_slssteam()
 		#Not using -p flag because it will silence errors
 		#Although I don't think there's anyone that doesn't have a ~/.local/share directory
 		mkdir "$SLSDIR"
-		if [[ $? -ne 0 ]]; then
+		if [ $? -ne 0 ]; then
 			echo "Unable to create $SLSDIR! Aborting"
 			exit 1
 		fi
@@ -124,7 +124,7 @@ install_slssteam()
 	if [ ! -d "$SLSPATH" ]; then #This whole fucking block should be unnecessary. Well, better safe than sorry. Thanks Valve for the Deck
 		mkdir "$SLSPATH"
 
-		if [[ $? -ne 0 ]]; then
+		if [ $? -ne 0 ]; then
 			echo "Unable to create $SLSPATH! Aborting"
 			exit 1
 		fi
@@ -152,7 +152,7 @@ install_flatpak()
 
 	if [ ! -d "$FLATPAK_SLSDIR" ]; then
 		mkdir -p "$FLATPAK_SLSDIR"
-		if [[ $? -ne 0 ]]; then
+		if [ $? -ne 0 ]; then
 			echo "Unable to create $FLATPAK_SLSDIR! Aborting flatpak install"
 			return 1
 		fi
@@ -170,7 +170,7 @@ install_all()
 	install_slssteam
 
 	install_path
-	if [[ $? -eq 0 ]]; then
+	if [ $? -eq 0 ]; then
 		install_wrapper steam
 		install_wrapper steam-runtime
 		#Wrapping the steam-jupiter doesn't work, probably doesn't get called from PATH
@@ -184,18 +184,18 @@ install_all()
 	echo "Install script done! If any wrappers or .desktop files have been created it was successfull."
 }
 
-if [[ $# -lt 1 ]]; then
+if [ $# -lt 1 ]; then
 	echo "Usage: $0 install|uninstall|flatpak-install|flatpak-uninstall"
 	exit 0
 fi
 
-if [ "$1" == "install" ]; then
+if [ "$1" = "install" ]; then
 	install_all
-elif [ "$1" == "uninstall" ]; then
+elif [ "$1" = "uninstall" ]; then
 	uninstall
-elif [ "$1" == "flatpak-install" ]; then
+elif [ "$1" = "flatpak-install" ]; then
 	install_flatpak
-elif [ "$1" == "flatpak-uninstall" ]; then
+elif [ "$1" = "flatpak-uninstall" ]; then
 	uninstall_flatpak
 else
 	echo "Unknown command $1!"

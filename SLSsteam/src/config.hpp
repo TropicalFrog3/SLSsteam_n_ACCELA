@@ -73,6 +73,7 @@ public:
 	MTVariable<std::string> morrenusKey;
 	MTVariable<std::string> ryuuKey;
 
+
 	//Using incomplete class to avoid runtime linking errors
 	CFileWatcher* watcher;
 
@@ -189,6 +190,7 @@ public:
 
 	bool isAddedAppId(uint32_t appId);
 	bool addAdditionalAppId(uint32_t appId);
+	bool removeAdditionalAppId(uint32_t appId);
 	
 	// Write auth to config.yaml
 	bool updateApiAuth(const std::string& morrenusKey, const std::string& ryuuKey);

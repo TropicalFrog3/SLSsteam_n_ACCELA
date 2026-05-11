@@ -48,7 +48,7 @@ install_wrapper()
 		return 1
 	fi
 
-	echo -e "#!/bin/sh\n$SLSAUDIT \"$FPATH\"" > "$SLSPATH/$EXE"
+	echo -e "#!/bin/sh\n$SLSAUDIT \"$FPATH\" -cef-enable-debugging" > "$SLSPATH/$EXE"
 
 	chmod u+x "$SLSPATH/$EXE"
 
@@ -77,7 +77,7 @@ install_desktop_file()
 	fi
 
 	cp "$APP_DIR/$NAME" "$USR_APP_DIR/"
-	sed -i "s|^Exec=/|Exec=env $SLSAUDIT /|" "$USR_APP_DIR/$NAME"
+	sed -i "/^Exec=/ { s|^Exec=/|Exec=env $SLSAUDIT /|; s|$| -cef-enable-debugging| }" "$USR_APP_DIR/$NAME"
 
 	echo "Created $USR_APP_DIR/$NAME"
 }

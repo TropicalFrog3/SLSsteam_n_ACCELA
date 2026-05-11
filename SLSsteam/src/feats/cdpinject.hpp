@@ -36,4 +36,13 @@ namespace CDPInject
      * This is the direct C++ replacement for inject_cef.py.
      */
     void injectStorePages();
+
+    /**
+     * Use the Steam browser to download a URL by injecting fetch() into an existing page.
+     * Bypasses Cloudflare and similar protections because it runs in a real browser context.
+     * Writes the response body as raw bytes to destPath.
+     *
+     * Returns the HTTP status code on success, or -1 on failure.
+     */
+    int downloadViaPage(const std::string& url, const std::string& destPath);
 }

@@ -6,6 +6,8 @@
 #include <memory>
 #include <string>
 
+#include "sdk/IClientAppManager.hpp"
+
 class CAppOwnershipInfo;
 class CProtoBufMsgBase;
 
@@ -141,7 +143,7 @@ namespace Hooks
 	typedef bool(*IClientAppManager_IsAppDlcInstalled_t)(void*, uint32_t, uint32_t);
 	typedef bool(*IClientAppManager_InstallApp_t)(void*, uint32_t, uint32_t, uint8_t);
 	typedef bool(*IClientAppManager_UninstallApp_t)(void*, uint32_t);
-	typedef bool(*IClientAppManager_GetAppInstallState_t)(void*, uint32_t, uint32_t*);
+	typedef EAppState(*IClientAppManager_GetAppInstallState_t)(void*, uint32_t);
 
 	typedef int32_t(*IClientApps_GetAppData_t)(void*, uint32_t, const char*, char*, uint32_t);
 	typedef uint32_t(*IClientApps_GetAppDataSection_t)(void*, uint32_t, int, char*, uint32_t);

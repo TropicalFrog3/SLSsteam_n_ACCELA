@@ -13,6 +13,7 @@
 #include <map>
 #include <map>
 #include <string>
+#include <sstream>
 
 static CURL* curl = nullptr;
 
@@ -21,18 +22,31 @@ std::map<uint64_t, std::unordered_set<std::string>> Updater::clientHashMap = std
 bool Updater::init()
 {
 	std::string data;
-	int res = Curl::getString("https://raw.githubusercontent.com/AceSLS/SLSsteam/refs/heads/main/res/updates.yaml", data);
-	g_pLog->info("Curl Res: %u\n", res);
-
-	if(res != 0)
+	auto overridePath = g_config.getDir().append("/updates.yaml");
+	if (std::filesystem::exists(overridePath))
 	{
-		data = loadFromCache();
-		if(data.size() < 1)
-		{
-			return false;
-		}
+		std::ifstream fstream(overridePath.c_str());
+		std::stringstream buf;
+		buf << fstream.rdbuf();
+		data = buf.str();
+		fstream.close();
+		g_pLog->info("Using local override updates.yaml\n");
+	}
+	else
+	{
+		int res = Curl::getString("https://raw.githubusercontent.com/AceSLS/SLSsteam/refs/heads/main/res/updates.yaml", data);
+		g_pLog->info("Curl Res: %u\n", res);
 
-		g_pLog->info("Using cached updates.yaml\n");
+		if(res != 0)
+		{
+			data = loadFromCache();
+			if(data.size() < 1)
+			{
+				return false;
+			}
+
+			g_pLog->info("Using cached updates.yaml\n");
+		}
 	}
 
 	g_pLog->debug("updates.yaml:\n%s\n", data.c_str());

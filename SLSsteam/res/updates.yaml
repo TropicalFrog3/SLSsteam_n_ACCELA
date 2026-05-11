@@ -15,3 +15,5 @@ SafeModeHashes:
   20260429110636:
     - ef9f55d4887e3ba898ba3f909f0658cab211828245175f8810836896190dad8f #ubuntu12_32 & steamdeck_stable
     - 1df2a076dcec4dc37e377982176d68996661c3a16c5c7f645d5e9b3cfe840d4e #ubuntu12_32 & steamdeck_stable - 20260506
+    - c18d7040c9d7aa7d8bccef84714b73d6f836447725e52f87f6ff77107569c9c2 #ubuntu12_32 & steamdeck_stable
+
