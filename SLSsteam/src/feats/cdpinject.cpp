@@ -5,9 +5,11 @@
 
 #include <cstring>
 #include <random>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
+
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -43,6 +45,20 @@ namespace CDPInject
 
         return json.substr(pos, end - pos);
     }
+
+    static int jsonGetInt(const std::string& json, const std::string& key)
+    {
+        std::string needle = "\"" + key + "\"";
+        auto pos = json.find(needle);
+        if (pos == std::string::npos) return -1;
+        pos = json.find(':', pos + needle.size());
+        if (pos == std::string::npos) return -1;
+        ++pos;
+        while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t')) ++pos;
+        if (pos >= json.size() || (!isdigit(json[pos]) && json[pos] != '-')) return -1;
+        try { return std::stoi(json.substr(pos)); } catch (...) { return -1; }
+    }
+
 
     /**
      * Split a JSON array of objects into individual object strings.
@@ -418,81 +434,109 @@ namespace CDPInject
 
     int downloadViaPage(const std::string& url, const std::string& destPath)
     {
-        // 1. Find a suitable Steam browser page to use
+        // Step 1: Snapshot existing pages + get CDP host/port
         auto pages = fetchPages();
-        std::string wsUrl;
-        std::string originalUrl;
-        for (auto& page : pages)
+        if (pages.empty()) { g_pLog->info("CDPInject::downloadViaPage: No CDP pages\n"); return -1; }
+
+        std::string cdpHost; int cdpPort = 0; std::string tmp;
+        if (!parseWsUrl(pages[0].webSocketDebuggerUrl, cdpHost, cdpPort, tmp)) return -1;
+
+        std::set<std::string> existingWsUrls;
+        for (auto& p : pages) existingWsUrls.insert(p.webSocketDebuggerUrl);
+
+        // Step 2: Create new hidden target via PUT /json/new, capture targetId
+        std::string newTargetId;
         {
-            if (!page.webSocketDebuggerUrl.empty() &&
-                page.url.find("steampowered.com") != std::string::npos)
+            int ctrlSock = tcpConnect(cdpHost.c_str(), cdpPort, 10);
+            if (ctrlSock < 0) { g_pLog->info("CDPInject::downloadViaPage: Cannot reach CDP\n"); return -1; }
+            std::string req = "PUT /json/new?about:blank HTTP/1.1\r\nHost: " + cdpHost + ":" + std::to_string(cdpPort) + "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            send(ctrlSock, req.c_str(), req.size(), 0);
+            struct timeval tv2{5, 0};
+            setsockopt(ctrlSock, SOL_SOCKET, SO_RCVTIMEO, &tv2, sizeof(tv2));
+            std::string resp = tcpReadAll(ctrlSock);
+            close(ctrlSock);
+            auto bodyPos = resp.find("\r\n\r\n");
+            if (bodyPos != std::string::npos)
+                newTargetId = jsonGetString(resp.substr(bodyPos + 4), "id");
+            g_pLog->info("CDPInject::downloadViaPage: Created hidden target id=%s\n", newTargetId.c_str());
+        }
+
+        // Step 3: Find the new target's WS URL
+        std::string popupWsUrl;
+        for (int attempt = 0; attempt < 20 && popupWsUrl.empty(); ++attempt)
+        {
+            // usleep(300000);
+            for (auto& pg : fetchPages())
             {
-                wsUrl = page.webSocketDebuggerUrl;
-                originalUrl = page.url;
-                break;
+                if (!pg.webSocketDebuggerUrl.empty() &&
+                    existingWsUrls.find(pg.webSocketDebuggerUrl) == existingWsUrls.end())
+                {
+                    popupWsUrl = pg.webSocketDebuggerUrl;
+                    break;
+                }
             }
         }
-        if (wsUrl.empty())
-        {
-            g_pLog->debug("CDPInject::downloadViaPage: No suitable Steam page found\n");
-            return -1;
-        }
+        if (popupWsUrl.empty()) { g_pLog->info("CDPInject::downloadViaPage: Target never appeared\n"); return -1; }
+        g_pLog->info("CDPInject::downloadViaPage: Hidden target ready\n");
 
-        // 2. Connect WebSocket with long timeout
-        std::string host;
-        int port = 0;
-        std::string path;
-        if (!parseWsUrl(wsUrl, host, port, path)) return -1;
+        // Step 4: Connect WebSocket to the hidden target
+        std::string host2; int port2 = 0; std::string path2;
+        if (!parseWsUrl(popupWsUrl, host2, port2, path2)) return -1;
 
-        int sock = tcpConnect(host.c_str(), port, 30);
-        if (sock < 0) return -1;
+        int sock = tcpConnect(host2.c_str(), port2, 30);
+        if (sock < 0) { g_pLog->info("CDPInject::downloadViaPage: WS connect failed\n"); return -1; }
 
-        struct timeval tv;
-        tv.tv_sec = 45;
-        tv.tv_usec = 0;
+        struct timeval tv{60, 0};
         setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
         std::string wsKey = generateWsKey();
-        if (!wsHandshake(sock, host, port, path, wsKey))
+        if (!wsHandshake(sock, host2, port2, path2, wsKey))
         {
-            close(sock);
-            return -1;
+            g_pLog->info("CDPInject::downloadViaPage: WS handshake failed\n");
+            close(sock); return -1;
         }
 
-        // 3. Extract base URL (scheme + host) from the download URL
-        std::string baseUrl;
-        {
-            size_t p = url.find("://");
-            if (p != std::string::npos)
-            {
-                size_t end = url.find('/', p + 3);
-                baseUrl = url.substr(0, end != std::string::npos ? end : url.size());
-            }
-        }
-        if (baseUrl.empty()) { close(sock); return -1; }
+        // // Step 5: IMMEDIATELY minimize the window so the user never sees it
+        // if (!newTargetId.empty())
+        // {
+        //     std::string getWinPayload = "{\"id\":20,\"method\":\"Browser.getWindowForTarget\","
+        //                                "\"params\":{\"targetId\":\"" + newTargetId + "\"}}";
+        //     std::string winResp = cdpSendAndRecv(sock, 20, getWinPayload, 5);
+        //     int windowId = jsonGetInt(winResp, "windowId");
+        //     if (windowId > 0)
+        //     {
+        //         std::string minPayload = "{\"id\":21,\"method\":\"Browser.setWindowBounds\","
+        //             "\"params\":{\"windowId\":" + std::to_string(windowId) +
+        //             ",\"bounds\":{\"windowState\":\"minimized\"}}}";
+        //         cdpSendAndRecv(sock, 21, minPayload, 5);
+        //         g_pLog->info("CDPInject::downloadViaPage: Window hidden (id=%d)\n", windowId);
+        //     }
+        // }
 
-        g_pLog->debug("CDPInject::downloadViaPage: Navigating to %s for same-origin context\n", baseUrl.c_str());
+        // Step 6: Navigate hidden target to base domain for same-origin fetch
+        // std::string baseUrl;
+        // {
+        //     size_t p = url.find("://");
+        //     if (p != std::string::npos)
+        //     {
+        //         size_t end = url.find('/', p + 3);
+        //         baseUrl = url.substr(0, end != std::string::npos ? end : url.size());
+        //     }
+        // }
+        // if (baseUrl.empty()) { close(sock); return -1; }
 
-        // 4. Navigate to the API domain to establish same-origin context
-        {
-            std::string navPayload = R"({"id":10,"method":"Page.navigate","params":{"url":")" + baseUrl + R"(/"}})";
-            cdpSendAndRecv(sock, 10, navPayload);
-        }
+        // g_pLog->info("CDPInject::downloadViaPage: Navigating hidden target (user cannot see this)\n");
+        // {
+        //     std::string navPayload = "{\"id\":10,\"method\":\"Page.navigate\",\"params\":{\"url\":\"" + baseUrl + "/\"}}";
+        //     cdpSendAndRecv(sock, 10, navPayload);
+        // }
+        // sleep(6);
 
-        // Wait for page load + potential Cloudflare challenge
-        sleep(6);
-
-        // 5. Inject fetch() JS — same-origin so no CORS issues
-        //    Returns "OK:<status>:<base64data>" on success, "ERR:<status>" on failure
-        //    We escape single quotes in the URL just in case
+        // Step 7: Inject fetch() JS
         std::string safeUrl = url;
         for (size_t i = 0; i < safeUrl.size(); ++i)
         {
-            if (safeUrl[i] == '\'' || safeUrl[i] == '\\')
-            {
-                safeUrl.insert(i, "\\");
-                ++i;
-            }
+            if (safeUrl[i] == '\'' || safeUrl[i] == '\\') { safeUrl.insert(i, "\\"); ++i; }
         }
 
         std::string fetchJs =
@@ -500,7 +544,7 @@ namespace CDPInject
             "try{"
             "var r=await fetch('" + safeUrl + "');"
             "var s=r.status;"
-            "if(!r.ok)return 'ERR:'+s;"
+            "if(!r.ok)return 'ERR:'+s+':http';"
             "var b=await r.arrayBuffer();"
             "var u=new Uint8Array(b);"
             "var c='';"
@@ -514,7 +558,6 @@ namespace CDPInject
             "}"
             "})()";
 
-        // Escape for JSON embedding
         std::string escapedJs;
         escapedJs.reserve(fetchJs.size() + 64);
         for (char c : fetchJs)
@@ -523,66 +566,36 @@ namespace CDPInject
             {
                 case '"':  escapedJs += "\\\""; break;
                 case '\\': escapedJs += "\\\\"; break;
-                case '\n': escapedJs += "\\n"; break;
-                case '\r': escapedJs += "\\r"; break;
-                case '\t': escapedJs += "\\t"; break;
-                default:   escapedJs += c; break;
+                case '\n': escapedJs += "\\n";  break;
+                case '\r': escapedJs += "\\r";  break;
+                case '\t': escapedJs += "\\t";  break;
+                default:   escapedJs += c;      break;
             }
         }
 
-        std::string evalPayload = R"({"id":11,"method":"Runtime.evaluate","params":{"expression":")" + escapedJs + R"(","awaitPromise":true}})";
+        std::string evalPayload = "{\"id\":11,\"method\":\"Runtime.evaluate\",\"params\":{\"expression\":\"" + escapedJs + "\",\"awaitPromise\":true,\"returnByValue\":true}}";
 
-        g_pLog->debug("CDPInject::downloadViaPage: Injecting fetch JS...\n");
+        g_pLog->info("CDPInject::downloadViaPage: Fetching file...\n");
         std::string response = cdpSendAndRecv(sock, 11, evalPayload, 60);
 
-        // 6. Navigate back to the original page
-        {
-            // Escape the originalUrl for JSON
-            std::string safeOrig;
-            for (char c : originalUrl)
-            {
-                if (c == '"') safeOrig += "\\\"";
-                else if (c == '\\') safeOrig += "\\\\";
-                else safeOrig += c;
-            }
-            std::string navBack = R"({"id":12,"method":"Page.navigate","params":{"url":")" + safeOrig + R"("}})";
-            wsSendText(sock, navBack);
-            // Don't wait for response, just fire and forget
-        }
-
+        // Step 8: Close hidden target
+        wsSendText(sock, "{\"id\":12,\"method\":\"Runtime.evaluate\",\"params\":{\"expression\":\"window.close()\"}}");
         close(sock);
 
-        if (response.empty())
-        {
-            g_pLog->debug("CDPInject::downloadViaPage: No response from fetch JS\n");
-            return -1;
-        }
+        if (response.empty()) { g_pLog->info("CDPInject::downloadViaPage: No response\n"); return -1; }
 
-        // 7. Parse the result from CDP response
-        //    Response: {"id":11,"result":{"result":{"type":"string","value":"OK:200:base64..."}}}
         std::string value = jsonGetString(response, "value");
-        if (value.empty())
-        {
-            g_pLog->debug("CDPInject::downloadViaPage: Empty value in CDP response\n");
-            return -1;
-        }
+        if (value.empty()) { g_pLog->info("CDPInject::downloadViaPage: Empty value: %.200s\n", response.c_str()); return -1; }
 
         if (value.rfind("ERR:", 0) == 0)
         {
-            // Parse error status
             int errStatus = -1;
             try { errStatus = std::stoi(value.substr(4)); } catch (...) {}
-            g_pLog->debug("CDPInject::downloadViaPage: Fetch returned error: %s\n", value.c_str());
+            g_pLog->info("CDPInject::downloadViaPage: %s\n", value.c_str());
             return errStatus;
         }
+        if (value.rfind("OK:", 0) != 0) { g_pLog->info("CDPInject::downloadViaPage: Unexpected: %.100s\n", value.c_str()); return -1; }
 
-        if (value.rfind("OK:", 0) != 0)
-        {
-            g_pLog->debug("CDPInject::downloadViaPage: Unexpected value: %.100s\n", value.c_str());
-            return -1;
-        }
-
-        // Parse "OK:<status>:<base64data>"
         size_t firstColon = value.find(':', 3);
         if (firstColon == std::string::npos) return -1;
 
@@ -590,21 +603,11 @@ namespace CDPInject
         try { httpStatus = std::stoi(value.substr(3, firstColon - 3)); } catch (...) {}
 
         std::string b64data = value.substr(firstColon + 1);
-        if (b64data.empty())
-        {
-            g_pLog->debug("CDPInject::downloadViaPage: Empty base64 data\n");
-            return httpStatus;
-        }
+        if (b64data.empty()) { g_pLog->info("CDPInject::downloadViaPage: Empty data (HTTP %d)\n", httpStatus); return httpStatus; }
 
-        // 8. Decode base64 and write to file
         std::string decoded = base64::from_base64(b64data);
-
         FILE* fp = fopen(destPath.c_str(), "wb");
-        if (!fp)
-        {
-            g_pLog->debug("CDPInject::downloadViaPage: Cannot open dest file %s\n", destPath.c_str());
-            return -1;
-        }
+        if (!fp) { g_pLog->info("CDPInject::downloadViaPage: Cannot open %s\n", destPath.c_str()); return -1; }
         fwrite(decoded.data(), 1, decoded.size(), fp);
         fclose(fp);
 

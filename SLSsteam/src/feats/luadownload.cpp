@@ -389,19 +389,19 @@ namespace LuaDownload
                 g_pLog->info("LuaDownload: Trying API '%s' -> %s\n", api.name, url.c_str());
                 pushStatus(appId, std::string("Trying ") + api.name + "...");
 
-                // Download
-                int httpCode = downloadToFile(url, zipPath, api.name, authHeader);
-                g_pLog->debug("LuaDownload: API '%s' returned HTTP %d\n", api.name, httpCode);
+                // // Download
+                // int httpCode = downloadToFile(url, zipPath, api.name, authHeader);
+                // g_pLog->debug("LuaDownload: API '%s' returned HTTP %d\n", api.name, httpCode);
 
                 // Steam browser fallback for Ryuu when curl fails (e.g. Cloudflare blocks direct requests)
-                if (std::string(api.name) == "Ryuu (API Key)" && httpCode != api.successCode)
-                {
-                    g_pLog->info("LuaDownload: Ryuu curl failed (HTTP %d), trying Steam browser fallback...\n", httpCode);
+                // if (std::string(api.name) == "Ryuu (API Key)" && httpCode != api.successCode)
+                // {
+                    // g_pLog->info("LuaDownload: Ryuu curl failed (HTTP %d), trying Steam browser fallback...\n", httpCode);
                     pushStatus(appId, std::string("Trying ") + api.name + " (browser)...");
                     std::filesystem::remove(zipPath); // Remove any partial/invalid file from curl
-                    httpCode = CDPInject::downloadViaPage(url, zipPath);
+                    int httpCode = CDPInject::downloadViaPage(url, zipPath);
                     g_pLog->debug("LuaDownload: Ryuu browser fallback returned HTTP %d\n", httpCode);
-                }
+                // }
 
                 if (httpCode == api.unavailableCode)
                 {
