@@ -69,4 +69,3 @@ fi
 
 log_info "Full installation complete!"
 echo -e "${GREEN}SLSsteam and ACCELA have been installed to their respective locations in ~/.local/share/${NC}"
-echo -e "${YELLOW}Note: You may need to restart your shell or Steam for changes to take effect.${NC}"

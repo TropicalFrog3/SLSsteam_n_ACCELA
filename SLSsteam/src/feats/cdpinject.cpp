@@ -5,14 +5,18 @@
 
 #include <cstring>
 #include <random>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
+
 
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <sys/wait.h>
+#include <signal.h>
 
 #include <openssl/sha.h>
 #include <base64/base64.hpp>
@@ -43,6 +47,20 @@ namespace CDPInject
 
         return json.substr(pos, end - pos);
     }
+
+    static int jsonGetInt(const std::string& json, const std::string& key)
+    {
+        std::string needle = "\"" + key + "\"";
+        auto pos = json.find(needle);
+        if (pos == std::string::npos) return -1;
+        pos = json.find(':', pos + needle.size());
+        if (pos == std::string::npos) return -1;
+        ++pos;
+        while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t')) ++pos;
+        if (pos >= json.size() || (!isdigit(json[pos]) && json[pos] != '-')) return -1;
+        try { return std::stoi(json.substr(pos)); } catch (...) { return -1; }
+    }
+
 
     /**
      * Split a JSON array of objects into individual object strings.
@@ -418,103 +436,142 @@ namespace CDPInject
 
     int downloadViaPage(const std::string& url, const std::string& destPath)
     {
-        // 1. Find a suitable Steam browser page to use
-        auto pages = fetchPages();
-        std::string wsUrl;
-        std::string originalUrl;
-        for (auto& page : pages)
-        {
-            if (!page.webSocketDebuggerUrl.empty() &&
-                page.url.find("steampowered.com") != std::string::npos)
-            {
-                wsUrl = page.webSocketDebuggerUrl;
-                originalUrl = page.url;
-                break;
-            }
-        }
-        if (wsUrl.empty())
-        {
-            g_pLog->debug("CDPInject::downloadViaPage: No suitable Steam page found\n");
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_int_distribution<> dist(40000, 50000);
+        int port = dist(gen);
+        std::string portArg = "--remote-debugging-port=" + std::to_string(port);
+
+        g_pLog->info("CDPInject::downloadViaPage: Spawning headless browser proxy on port %d\n", port);
+
+        pid_t pid = fork();
+        if (pid < 0) {
+            g_pLog->info("CDPInject::downloadViaPage: fork failed\n");
             return -1;
         }
 
-        // 2. Connect WebSocket with long timeout
-        std::string host;
-        int port = 0;
-        std::string path;
-        if (!parseWsUrl(wsUrl, host, port, path)) return -1;
+        if (pid == 0) {
+            freopen("/dev/null", "w", stdout);
+            freopen("/dev/null", "w", stderr);
+            freopen("/dev/null", "r", stdin);
 
-        int sock = tcpConnect(host.c_str(), port, 30);
-        if (sock < 0) return -1;
+            // Unique user-data-dir avoids colliding with existing Chrome/Steam instances
+            std::string userDataDir = "--user-data-dir=/tmp/sls_headless_proxy_" + std::to_string(port);
 
-        struct timeval tv;
-        tv.tv_sec = 45;
-        tv.tv_usec = 0;
+            // First try Steam's built-in browser (steamwebhelper) so the user doesn't need Chrome installed
+            const char* home = getenv("HOME");
+            if (home) {
+                std::string path1 = std::string(home) + "/.steam/steam/ubuntu12_64/steamwebhelper";
+                std::string path2 = std::string(home) + "/.local/share/Steam/ubuntu12_64/steamwebhelper";
+                std::string path3 = std::string(home) + "/.var/app/com.valvesoftware.Steam/data/Steam/ubuntu12_64/steamwebhelper";
+
+                execl(path1.c_str(), "steamwebhelper", "--headless", "--disable-gpu", userDataDir.c_str(), portArg.c_str(), "about:blank", nullptr);
+                execl(path2.c_str(), "steamwebhelper", "--headless", "--disable-gpu", userDataDir.c_str(), portArg.c_str(), "about:blank", nullptr);
+                execl(path3.c_str(), "steamwebhelper", "--headless", "--disable-gpu", userDataDir.c_str(), portArg.c_str(), "about:blank", nullptr);
+            }
+
+            // Fallback to system Chrome/Chromium if steamwebhelper fails
+            execlp("google-chrome", "google-chrome", "--headless", "--disable-gpu", userDataDir.c_str(), portArg.c_str(), "about:blank", nullptr);
+            execlp("google-chrome-stable", "google-chrome-stable", "--headless", "--disable-gpu", userDataDir.c_str(), portArg.c_str(), "about:blank", nullptr);
+            execlp("chromium-browser", "chromium-browser", "--headless", "--disable-gpu", userDataDir.c_str(), portArg.c_str(), "about:blank", nullptr);
+            execlp("chromium", "chromium", "--headless", "--disable-gpu", userDataDir.c_str(), portArg.c_str(), "about:blank", nullptr);
+            _exit(1);
+        }
+
+        std::vector<CDPPage> pages;
+        for (int i = 0; i < 20; i++) {
+            pages = fetchPages("127.0.0.1", port);
+            if (!pages.empty()) {
+                break;
+            }
+
+            // Steam's steamwebhelper doesn't open a default tab in headless mode.
+            // If the server is up but returned no pages, we must ask it to create one.
+            int sock = tcpConnect("127.0.0.1", port);
+            if (sock >= 0) {
+                std::string httpReq = "PUT /json/new HTTP/1.1\r\nHost: 127.0.0.1:";
+                httpReq += std::to_string(port);
+                httpReq += "\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+                send(sock, httpReq.c_str(), httpReq.size(), 0);
+                // We don't care about the response body, just triggering the creation
+                close(sock);
+            }
+
+            usleep(250000); // Wait 0.25s each time, max 5 seconds
+        }
+
+        if (pages.empty()) {
+            g_pLog->info("CDPInject::downloadViaPage: Failed to connect to headless proxy\n");
+            kill(pid, SIGTERM);
+            waitpid(pid, nullptr, 0);
+            return -1;
+        }
+
+        std::string wsUrl = pages[0].webSocketDebuggerUrl;
+        
+        std::string host2; int port2 = 0; std::string path2;
+        if (!parseWsUrl(wsUrl, host2, port2, path2)) {
+            kill(pid, SIGTERM);
+            waitpid(pid, nullptr, 0);
+            return -1;
+        }
+
+        int sock = tcpConnect(host2.c_str(), port2, 30);
+        if (sock < 0) { 
+            kill(pid, SIGTERM);
+            waitpid(pid, nullptr, 0);
+            return -1; 
+        }
+
+        struct timeval tv{60, 0};
         setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
         std::string wsKey = generateWsKey();
-        if (!wsHandshake(sock, host, port, path, wsKey))
+        if (!wsHandshake(sock, host2, port2, path2, wsKey))
         {
             close(sock);
+            kill(pid, SIGTERM);
+            waitpid(pid, nullptr, 0);
             return -1;
         }
 
-        // 3. Extract base URL (scheme + host) from the download URL
-        std::string baseUrl;
-        {
-            size_t p = url.find("://");
-            if (p != std::string::npos)
-            {
-                size_t end = url.find('/', p + 3);
-                baseUrl = url.substr(0, end != std::string::npos ? end : url.size());
-            }
-        }
-        if (baseUrl.empty()) { close(sock); return -1; }
-
-        g_pLog->debug("CDPInject::downloadViaPage: Navigating to %s for same-origin context\n", baseUrl.c_str());
-
-        // 4. Navigate to the API domain to establish same-origin context
-        {
-            std::string navPayload = R"({"id":10,"method":"Page.navigate","params":{"url":")" + baseUrl + R"(/"}})";
-            cdpSendAndRecv(sock, 10, navPayload);
-        }
-
-        // Wait for page load + potential Cloudflare challenge
-        sleep(6);
-
-        // 5. Inject fetch() JS — same-origin so no CORS issues
-        //    Returns "OK:<status>:<base64data>" on success, "ERR:<status>" on failure
-        //    We escape single quotes in the URL just in case
+        // Step 7: Inject fetch() JS
         std::string safeUrl = url;
         for (size_t i = 0; i < safeUrl.size(); ++i)
         {
-            if (safeUrl[i] == '\'' || safeUrl[i] == '\\')
-            {
-                safeUrl.insert(i, "\\");
-                ++i;
-            }
+            if (safeUrl[i] == '\'' || safeUrl[i] == '\\') { safeUrl.insert(i, "\\"); ++i; }
         }
 
         std::string fetchJs =
             "(async function(){"
+            "return await new Promise((resolve)=>{"
             "try{"
-            "var r=await fetch('" + safeUrl + "');"
-            "var s=r.status;"
-            "if(!r.ok)return 'ERR:'+s;"
-            "var b=await r.arrayBuffer();"
-            "var u=new Uint8Array(b);"
+            "var xhr=new XMLHttpRequest();"
+            "xhr.open('GET','" + safeUrl + "',true);"
+            "xhr.responseType='arraybuffer';"
+            "xhr.onload=function(){"
+            "try{"
+            "var u=new Uint8Array(xhr.response);"
             "var c='';"
             "var K=8192;"
             "for(var i=0;i<u.length;i+=K){"
             "c+=String.fromCharCode.apply(null,u.subarray(i,Math.min(i+K,u.length)));"
             "}"
-            "return 'OK:'+s+':'+btoa(c);"
+            "resolve('OK:'+xhr.status+':'+btoa(c));"
             "}catch(e){"
-            "return 'ERR:-1:'+e.message;"
+            "resolve('ERR:-2:'+e.message);"
             "}"
+            "};"
+            "xhr.onerror=function(){"
+            "resolve('ERR:-1:xhr failed');"
+            "};"
+            "xhr.send();"
+            "}catch(e){"
+            "resolve('ERR:-3:'+e.message);"
+            "}"
+            "});"
             "})()";
 
-        // Escape for JSON embedding
         std::string escapedJs;
         escapedJs.reserve(fetchJs.size() + 64);
         for (char c : fetchJs)
@@ -523,66 +580,36 @@ namespace CDPInject
             {
                 case '"':  escapedJs += "\\\""; break;
                 case '\\': escapedJs += "\\\\"; break;
-                case '\n': escapedJs += "\\n"; break;
-                case '\r': escapedJs += "\\r"; break;
-                case '\t': escapedJs += "\\t"; break;
-                default:   escapedJs += c; break;
+                case '\n': escapedJs += "\\n";  break;
+                case '\r': escapedJs += "\\r";  break;
+                case '\t': escapedJs += "\\t";  break;
+                default:   escapedJs += c;      break;
             }
         }
 
-        std::string evalPayload = R"({"id":11,"method":"Runtime.evaluate","params":{"expression":")" + escapedJs + R"(","awaitPromise":true}})";
+        std::string evalPayload = "{\"id\":11,\"method\":\"Runtime.evaluate\",\"params\":{\"expression\":\"" + escapedJs + "\",\"awaitPromise\":true,\"returnByValue\":true}}";
 
-        g_pLog->debug("CDPInject::downloadViaPage: Injecting fetch JS...\n");
+        g_pLog->info("CDPInject::downloadViaPage: Fetching file...\n");
         std::string response = cdpSendAndRecv(sock, 11, evalPayload, 60);
 
-        // 6. Navigate back to the original page
-        {
-            // Escape the originalUrl for JSON
-            std::string safeOrig;
-            for (char c : originalUrl)
-            {
-                if (c == '"') safeOrig += "\\\"";
-                else if (c == '\\') safeOrig += "\\\\";
-                else safeOrig += c;
-            }
-            std::string navBack = R"({"id":12,"method":"Page.navigate","params":{"url":")" + safeOrig + R"("}})";
-            wsSendText(sock, navBack);
-            // Don't wait for response, just fire and forget
-        }
-
         close(sock);
+        kill(pid, SIGTERM);
+        waitpid(pid, nullptr, 0);
 
-        if (response.empty())
-        {
-            g_pLog->debug("CDPInject::downloadViaPage: No response from fetch JS\n");
-            return -1;
-        }
+        if (response.empty()) { g_pLog->info("CDPInject::downloadViaPage: No response\n"); return -1; }
 
-        // 7. Parse the result from CDP response
-        //    Response: {"id":11,"result":{"result":{"type":"string","value":"OK:200:base64..."}}}
         std::string value = jsonGetString(response, "value");
-        if (value.empty())
-        {
-            g_pLog->debug("CDPInject::downloadViaPage: Empty value in CDP response\n");
-            return -1;
-        }
+        if (value.empty()) { g_pLog->info("CDPInject::downloadViaPage: Empty value: %.200s\n", response.c_str()); return -1; }
 
         if (value.rfind("ERR:", 0) == 0)
         {
-            // Parse error status
             int errStatus = -1;
             try { errStatus = std::stoi(value.substr(4)); } catch (...) {}
-            g_pLog->debug("CDPInject::downloadViaPage: Fetch returned error: %s\n", value.c_str());
+            g_pLog->info("CDPInject::downloadViaPage: %s\n", value.c_str());
             return errStatus;
         }
+        if (value.rfind("OK:", 0) != 0) { g_pLog->info("CDPInject::downloadViaPage: Unexpected: %.100s\n", value.c_str()); return -1; }
 
-        if (value.rfind("OK:", 0) != 0)
-        {
-            g_pLog->debug("CDPInject::downloadViaPage: Unexpected value: %.100s\n", value.c_str());
-            return -1;
-        }
-
-        // Parse "OK:<status>:<base64data>"
         size_t firstColon = value.find(':', 3);
         if (firstColon == std::string::npos) return -1;
 
@@ -590,21 +617,11 @@ namespace CDPInject
         try { httpStatus = std::stoi(value.substr(3, firstColon - 3)); } catch (...) {}
 
         std::string b64data = value.substr(firstColon + 1);
-        if (b64data.empty())
-        {
-            g_pLog->debug("CDPInject::downloadViaPage: Empty base64 data\n");
-            return httpStatus;
-        }
+        if (b64data.empty()) { g_pLog->info("CDPInject::downloadViaPage: Empty data (HTTP %d)\n", httpStatus); return httpStatus; }
 
-        // 8. Decode base64 and write to file
         std::string decoded = base64::from_base64(b64data);
-
         FILE* fp = fopen(destPath.c_str(), "wb");
-        if (!fp)
-        {
-            g_pLog->debug("CDPInject::downloadViaPage: Cannot open dest file %s\n", destPath.c_str());
-            return -1;
-        }
+        if (!fp) { g_pLog->info("CDPInject::downloadViaPage: Cannot open %s\n", destPath.c_str()); return -1; }
         fwrite(decoded.data(), 1, decoded.size(), fp);
         fclose(fp);
 
