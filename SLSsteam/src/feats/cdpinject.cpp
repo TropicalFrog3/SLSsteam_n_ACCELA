@@ -15,6 +15,8 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <sys/wait.h>
+#include <signal.h>
 
 #include <openssl/sha.h>
 #include <base64/base64.hpp>
@@ -434,57 +436,92 @@ namespace CDPInject
 
     int downloadViaPage(const std::string& url, const std::string& destPath)
     {
-        // Step 1: Snapshot existing pages + get CDP host/port
-        auto pages = fetchPages();
-        if (pages.empty()) { g_pLog->info("CDPInject::downloadViaPage: No CDP pages\n"); return -1; }
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_int_distribution<> dist(40000, 50000);
+        int port = dist(gen);
+        std::string portArg = "--remote-debugging-port=" + std::to_string(port);
 
-        std::string cdpHost; int cdpPort = 0; std::string tmp;
-        if (!parseWsUrl(pages[0].webSocketDebuggerUrl, cdpHost, cdpPort, tmp)) return -1;
+        g_pLog->info("CDPInject::downloadViaPage: Spawning headless browser proxy on port %d\n", port);
 
-        std::set<std::string> existingWsUrls;
-        for (auto& p : pages) existingWsUrls.insert(p.webSocketDebuggerUrl);
-
-        // Step 2: Create new hidden target via PUT /json/new, capture targetId
-        std::string newTargetId;
-        {
-            int ctrlSock = tcpConnect(cdpHost.c_str(), cdpPort, 10);
-            if (ctrlSock < 0) { g_pLog->info("CDPInject::downloadViaPage: Cannot reach CDP\n"); return -1; }
-            std::string req = "PUT /json/new?about:blank HTTP/1.1\r\nHost: " + cdpHost + ":" + std::to_string(cdpPort) + "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-            send(ctrlSock, req.c_str(), req.size(), 0);
-            struct timeval tv2{5, 0};
-            setsockopt(ctrlSock, SOL_SOCKET, SO_RCVTIMEO, &tv2, sizeof(tv2));
-            std::string resp = tcpReadAll(ctrlSock);
-            close(ctrlSock);
-            auto bodyPos = resp.find("\r\n\r\n");
-            if (bodyPos != std::string::npos)
-                newTargetId = jsonGetString(resp.substr(bodyPos + 4), "id");
-            g_pLog->info("CDPInject::downloadViaPage: Created hidden target id=%s\n", newTargetId.c_str());
+        pid_t pid = fork();
+        if (pid < 0) {
+            g_pLog->info("CDPInject::downloadViaPage: fork failed\n");
+            return -1;
         }
 
-        // Step 3: Find the new target's WS URL
-        std::string popupWsUrl;
-        for (int attempt = 0; attempt < 20 && popupWsUrl.empty(); ++attempt)
-        {
-            // usleep(300000);
-            for (auto& pg : fetchPages())
-            {
-                if (!pg.webSocketDebuggerUrl.empty() &&
-                    existingWsUrls.find(pg.webSocketDebuggerUrl) == existingWsUrls.end())
-                {
-                    popupWsUrl = pg.webSocketDebuggerUrl;
-                    break;
-                }
+        if (pid == 0) {
+            freopen("/dev/null", "w", stdout);
+            freopen("/dev/null", "w", stderr);
+            freopen("/dev/null", "r", stdin);
+
+            // Unique user-data-dir avoids colliding with existing Chrome/Steam instances
+            std::string userDataDir = "--user-data-dir=/tmp/sls_headless_proxy_" + std::to_string(port);
+
+            // First try Steam's built-in browser (steamwebhelper) so the user doesn't need Chrome installed
+            const char* home = getenv("HOME");
+            if (home) {
+                std::string path1 = std::string(home) + "/.steam/steam/ubuntu12_64/steamwebhelper";
+                std::string path2 = std::string(home) + "/.local/share/Steam/ubuntu12_64/steamwebhelper";
+                std::string path3 = std::string(home) + "/.var/app/com.valvesoftware.Steam/data/Steam/ubuntu12_64/steamwebhelper";
+
+                execl(path1.c_str(), "steamwebhelper", "--headless", "--disable-gpu", userDataDir.c_str(), portArg.c_str(), "about:blank", nullptr);
+                execl(path2.c_str(), "steamwebhelper", "--headless", "--disable-gpu", userDataDir.c_str(), portArg.c_str(), "about:blank", nullptr);
+                execl(path3.c_str(), "steamwebhelper", "--headless", "--disable-gpu", userDataDir.c_str(), portArg.c_str(), "about:blank", nullptr);
             }
-        }
-        if (popupWsUrl.empty()) { g_pLog->info("CDPInject::downloadViaPage: Target never appeared\n"); return -1; }
-        g_pLog->info("CDPInject::downloadViaPage: Hidden target ready\n");
 
-        // Step 4: Connect WebSocket to the hidden target
+            // Fallback to system Chrome/Chromium if steamwebhelper fails
+            execlp("google-chrome", "google-chrome", "--headless", "--disable-gpu", userDataDir.c_str(), portArg.c_str(), "about:blank", nullptr);
+            execlp("google-chrome-stable", "google-chrome-stable", "--headless", "--disable-gpu", userDataDir.c_str(), portArg.c_str(), "about:blank", nullptr);
+            execlp("chromium-browser", "chromium-browser", "--headless", "--disable-gpu", userDataDir.c_str(), portArg.c_str(), "about:blank", nullptr);
+            execlp("chromium", "chromium", "--headless", "--disable-gpu", userDataDir.c_str(), portArg.c_str(), "about:blank", nullptr);
+            _exit(1);
+        }
+
+        std::vector<CDPPage> pages;
+        for (int i = 0; i < 20; i++) {
+            pages = fetchPages("127.0.0.1", port);
+            if (!pages.empty()) {
+                break;
+            }
+
+            // Steam's steamwebhelper doesn't open a default tab in headless mode.
+            // If the server is up but returned no pages, we must ask it to create one.
+            int sock = tcpConnect("127.0.0.1", port);
+            if (sock >= 0) {
+                std::string httpReq = "PUT /json/new HTTP/1.1\r\nHost: 127.0.0.1:";
+                httpReq += std::to_string(port);
+                httpReq += "\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+                send(sock, httpReq.c_str(), httpReq.size(), 0);
+                // We don't care about the response body, just triggering the creation
+                close(sock);
+            }
+
+            usleep(250000); // Wait 0.25s each time, max 5 seconds
+        }
+
+        if (pages.empty()) {
+            g_pLog->info("CDPInject::downloadViaPage: Failed to connect to headless proxy\n");
+            kill(pid, SIGTERM);
+            waitpid(pid, nullptr, 0);
+            return -1;
+        }
+
+        std::string wsUrl = pages[0].webSocketDebuggerUrl;
+        
         std::string host2; int port2 = 0; std::string path2;
-        if (!parseWsUrl(popupWsUrl, host2, port2, path2)) return -1;
+        if (!parseWsUrl(wsUrl, host2, port2, path2)) {
+            kill(pid, SIGTERM);
+            waitpid(pid, nullptr, 0);
+            return -1;
+        }
 
         int sock = tcpConnect(host2.c_str(), port2, 30);
-        if (sock < 0) { g_pLog->info("CDPInject::downloadViaPage: WS connect failed\n"); return -1; }
+        if (sock < 0) { 
+            kill(pid, SIGTERM);
+            waitpid(pid, nullptr, 0);
+            return -1; 
+        }
 
         struct timeval tv{60, 0};
         setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
@@ -492,45 +529,11 @@ namespace CDPInject
         std::string wsKey = generateWsKey();
         if (!wsHandshake(sock, host2, port2, path2, wsKey))
         {
-            g_pLog->info("CDPInject::downloadViaPage: WS handshake failed\n");
-            close(sock); return -1;
+            close(sock);
+            kill(pid, SIGTERM);
+            waitpid(pid, nullptr, 0);
+            return -1;
         }
-
-        // // Step 5: IMMEDIATELY minimize the window so the user never sees it
-        // if (!newTargetId.empty())
-        // {
-        //     std::string getWinPayload = "{\"id\":20,\"method\":\"Browser.getWindowForTarget\","
-        //                                "\"params\":{\"targetId\":\"" + newTargetId + "\"}}";
-        //     std::string winResp = cdpSendAndRecv(sock, 20, getWinPayload, 5);
-        //     int windowId = jsonGetInt(winResp, "windowId");
-        //     if (windowId > 0)
-        //     {
-        //         std::string minPayload = "{\"id\":21,\"method\":\"Browser.setWindowBounds\","
-        //             "\"params\":{\"windowId\":" + std::to_string(windowId) +
-        //             ",\"bounds\":{\"windowState\":\"minimized\"}}}";
-        //         cdpSendAndRecv(sock, 21, minPayload, 5);
-        //         g_pLog->info("CDPInject::downloadViaPage: Window hidden (id=%d)\n", windowId);
-        //     }
-        // }
-
-        // Step 6: Navigate hidden target to base domain for same-origin fetch
-        // std::string baseUrl;
-        // {
-        //     size_t p = url.find("://");
-        //     if (p != std::string::npos)
-        //     {
-        //         size_t end = url.find('/', p + 3);
-        //         baseUrl = url.substr(0, end != std::string::npos ? end : url.size());
-        //     }
-        // }
-        // if (baseUrl.empty()) { close(sock); return -1; }
-
-        // g_pLog->info("CDPInject::downloadViaPage: Navigating hidden target (user cannot see this)\n");
-        // {
-        //     std::string navPayload = "{\"id\":10,\"method\":\"Page.navigate\",\"params\":{\"url\":\"" + baseUrl + "/\"}}";
-        //     cdpSendAndRecv(sock, 10, navPayload);
-        // }
-        // sleep(6);
 
         // Step 7: Inject fetch() JS
         std::string safeUrl = url;
@@ -541,21 +544,32 @@ namespace CDPInject
 
         std::string fetchJs =
             "(async function(){"
+            "return await new Promise((resolve)=>{"
             "try{"
-            "var r=await fetch('" + safeUrl + "');"
-            "var s=r.status;"
-            "if(!r.ok)return 'ERR:'+s+':http';"
-            "var b=await r.arrayBuffer();"
-            "var u=new Uint8Array(b);"
+            "var xhr=new XMLHttpRequest();"
+            "xhr.open('GET','" + safeUrl + "',true);"
+            "xhr.responseType='arraybuffer';"
+            "xhr.onload=function(){"
+            "try{"
+            "var u=new Uint8Array(xhr.response);"
             "var c='';"
             "var K=8192;"
             "for(var i=0;i<u.length;i+=K){"
             "c+=String.fromCharCode.apply(null,u.subarray(i,Math.min(i+K,u.length)));"
             "}"
-            "return 'OK:'+s+':'+btoa(c);"
+            "resolve('OK:'+xhr.status+':'+btoa(c));"
             "}catch(e){"
-            "return 'ERR:-1:'+e.message;"
+            "resolve('ERR:-2:'+e.message);"
             "}"
+            "};"
+            "xhr.onerror=function(){"
+            "resolve('ERR:-1:xhr failed');"
+            "};"
+            "xhr.send();"
+            "}catch(e){"
+            "resolve('ERR:-3:'+e.message);"
+            "}"
+            "});"
             "})()";
 
         std::string escapedJs;
@@ -578,9 +592,9 @@ namespace CDPInject
         g_pLog->info("CDPInject::downloadViaPage: Fetching file...\n");
         std::string response = cdpSendAndRecv(sock, 11, evalPayload, 60);
 
-        // Step 8: Close hidden target
-        wsSendText(sock, "{\"id\":12,\"method\":\"Runtime.evaluate\",\"params\":{\"expression\":\"window.close()\"}}");
         close(sock);
+        kill(pid, SIGTERM);
+        waitpid(pid, nullptr, 0);
 
         if (response.empty()) { g_pLog->info("CDPInject::downloadViaPage: No response\n"); return -1; }
 
