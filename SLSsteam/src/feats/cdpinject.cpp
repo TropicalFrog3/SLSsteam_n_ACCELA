@@ -710,11 +710,7 @@ namespace CDPInject
                 // Update cached status
                 appUnlockStatus[productID] = false;
 
-                overlay.innerHTML = '<div style="background:#1a1c23;border:1px solid #2a2d36;border-radius:12px;padding:30px;width:400px;box-shadow:0 15px 30px rgba(0,0,0,0.5);font-family:Inter,sans-serif;color:#fff;text-align:center;">' +
-                    '<h2 style="margin:0 0 10px;font-size:20px;font-weight:600;color:#5cb85c;">Removed Successfully!</h2>' +
-                    '<p style="margin:0;font-size:13px;color:#8a8d96;">Restart Steam for changes to take effect.</p>' +
-                '</div>';
-                setTimeout(function() { overlay.remove(); }, 3000);
+                overlay.remove();
 
                 // Switch button back to Download Lua
                 setupDownloadButton(luaLink, luaBtn, productID);

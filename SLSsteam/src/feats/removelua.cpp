@@ -225,11 +225,7 @@ namespace RemoveLua
                 fetch('http://127.0.0.1:9001/remove?id=' + appid + '&game=true', { mode: 'no-cors' })
                     .then(function() {
                         setRestartState();
-                        modalOverlay.innerHTML = '<div style="background:#1a1c23;border:1px solid #2a2d36;border-radius:12px;padding:30px;width:400px;box-shadow:0 15px 30px rgba(0,0,0,0.5);font-family:Inter,sans-serif;color:#fff;text-align:center;">' +
-                            '<h2 style="margin:0 0 10px;font-size:20px;font-weight:600;color:#5cb85c;">Removed Successfully!</h2>' +
-                            '<p style="margin:0;font-size:13px;color:#8a8d96;">The game has been hidden. Click "Restart Steam" to refresh.</p>' +
-                        '</div>';
-                        setTimeout(function() { modalOverlay.remove(); }, 4000);
+                        modalOverlay.remove();
                     });
             };
         };

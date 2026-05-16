@@ -241,8 +241,8 @@ namespace StoreInject
                                             try {
                                                 uint32_t appId = std::stoul(pid);
                                                 g_config.addAdditionalAppId(appId);
-                                                Apps::setInstalled(appId);
-                                                scanLuaPluginsAndUpdateConfig();
+                                                // Apps::setInstalled(appId);
+                                                // scanLuaPluginsAndUpdateConfig();
                                             } catch (...) {
                                                 g_pLog->warn("LuaDownload: Failed to register appid=%s in library\n", pid.c_str());
                                             }
@@ -286,10 +286,11 @@ namespace StoreInject
                     }
 
                     // Trigger the C++ CDP injector every 5 seconds to inject new pages
-                    if (checkCounter++ % 2 == 0)
+                    if (checkCounter++ >= 1)
                     {
                         CDPInject::injectStorePages();
                         RemoveLua::injectRemoveLuaScript();
+                        checkCounter = 0;
                     }
                 }
                 close(sock);
