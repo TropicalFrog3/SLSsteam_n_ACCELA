@@ -19,6 +19,7 @@
 
 #include "feats/achievements.hpp"
 #include "feats/apps.hpp"
+#include "feats/depotkeys.hpp"
 #include "feats/dlc.hpp"
 #include "feats/misc.hpp"
 #include "feats/fakeappid.hpp"
@@ -368,6 +369,7 @@ static void hkProtoBufMsgBase_InitFromPacket(CProtoBufMsgBase* pMsg, void* pSrc)
 	g_pLog->debug("Received ProtoBufMsg of type %u with type %s\n", pMsg->type, MemHlp::getTypeName(pMsg));
 
 	Achievements::recvMessage(pMsg);
+	DepotKeys::recvMsg(pMsg);
 	Misc::recvMsg(pMsg);
 	Ticket::recvMsg(pMsg);
 }
@@ -375,6 +377,7 @@ static void hkProtoBufMsgBase_InitFromPacket(CProtoBufMsgBase* pMsg, void* pSrc)
 static uint32_t hkProtoBufMsgBase_Send(CProtoBufMsgBase* pMsg)
 {
 	Apps::sendMsg(pMsg);
+	DepotKeys::sendMsg(pMsg);
 	FakeAppIds::sendMsg(pMsg);
 	Misc::sendMsg(pMsg);
 

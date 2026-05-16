@@ -1,6 +1,7 @@
 #include "config.hpp"
 
 #include "config_default.hpp"
+#include "feats/depotkeys.hpp"
 #include "filewatcher.hpp"
 #include "log.hpp"
 #include "yaml-cpp/yaml.h"
@@ -107,6 +108,7 @@ static void onFileChange(const char* filename)
 
 	g_config.loadSettings();
 	scanLuaPluginsAndUpdateConfig();
+	DepotKeys::scanLuaPluginsForDepotKeys();
 }
 
 bool CConfig::init()

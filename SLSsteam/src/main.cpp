@@ -7,6 +7,7 @@
 #include "update.hpp"
 #include "utils.hpp"
 #include "feats/cefsizefix.hpp"
+#include "feats/depotkeys.hpp"
 #include "feats/storeinject.hpp"
 #include "feats/apps.hpp"
 #include "feats/removelua.hpp"
@@ -135,6 +136,7 @@ static void setup()
 	}
 
 	scanLuaPluginsAndUpdateConfig();
+	DepotKeys::scanLuaPluginsForDepotKeys();
 
 	//Since we can't statically link everything and some distros seem to respect LD_LIBRARY_PATH
 	//more or less than mine does we just force append those
