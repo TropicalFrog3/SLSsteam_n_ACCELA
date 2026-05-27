@@ -10,7 +10,7 @@
 
 namespace Updater
 {
-	extern std::map<uint64_t, std::unordered_set<std::string>> clientHashMap;
+	extern std::map<std::string, std::unordered_set<std::string>> clientHashMap;
 
 	std::string getCacheFilePath();
 	std::string loadFromCache();

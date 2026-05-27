@@ -17,7 +17,7 @@
 
 static CURL* curl = nullptr;
 
-std::map<uint64_t, std::unordered_set<std::string>> Updater::clientHashMap = std::map<uint64_t, std::unordered_set<std::string>>();
+std::map<std::string, std::unordered_set<std::string>> Updater::clientHashMap = std::map<std::string, std::unordered_set<std::string>>();
 
 bool Updater::init()
 {
@@ -56,17 +56,17 @@ bool Updater::init()
 		YAML::Node node = YAML::Load(data);
 		for (const auto& sub : node["SafeModeHashes"])
 		{
-			uint64_t version = sub.first.as<uint64_t>();
+			std::string version = sub.first.as<std::string>();
 			clientHashMap[version] = std::unordered_set<std::string>();
 
-			g_pLog->debug("Parsing version %llu\n", version);
+			g_pLog->debug("Parsing version %s\n", version.c_str());
 
 			for(const auto& hash : sub.second)
 			{
 				auto str = hash.as<std::string>();
 				clientHashMap[version].emplace(str);
 
-				g_pLog->debug("Added %s to SLSsteam version %llu\n", str.c_str(), version);
+				g_pLog->debug("Added %s to SLSsteam version %s\n", str.c_str(), version.c_str());
 			}
 		}
 	}

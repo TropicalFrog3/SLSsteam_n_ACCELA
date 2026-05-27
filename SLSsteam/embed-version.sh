@@ -1,10 +1,8 @@
 #!/bin/bash
 
-VERSION="$(cat "./res/version.txt")"
+VERSION="$(grep '^Version:' ./res/version | cut -d' ' -f2 | xargs)"
 
 echo "#pragma once
 
-#include <cstdint>
 
-
-constexpr uint64_t VERSION = $VERSION;" > src/version.hpp
+constexpr const char* VERSION = \"$VERSION\";" > src/version.hpp

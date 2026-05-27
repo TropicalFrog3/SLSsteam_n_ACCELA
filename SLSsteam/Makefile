@@ -16,7 +16,7 @@ LDFLAGS += $(shell pkg-config --libs "openssl")
 LDFLAGS += $(shell pkg-config --libs "libcurl")
 
 #DATE := $(shell date "+%Y%m%d%H%M%S")
-DATE := $(shell cat res/version.txt)
+DATE := $(shell grep '^Version:' res/version | cut -d' ' -f2 | xargs)
 
 ifeq ($(shell echo $$NATIVE),1)
 	CXXFLAGS += -march=native
@@ -45,7 +45,7 @@ tools/ticket-grabber/bin/Release/net9.0/linux-x64/publish/ticket-grabber:
 	sh tools/ticket-grabber/build.sh
 
 -include $(deps)
-obj/update.o: src/update.cpp res/version.txt
+obj/update.o: src/update.cpp res/version
 	$(shell ./embed-version.sh)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -isysteminclude -MMD -MP -c $< -o $@

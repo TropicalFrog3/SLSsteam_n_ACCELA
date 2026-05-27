@@ -12,6 +12,7 @@
 #include "feats/apps.hpp"
 #include "feats/removelua.hpp"
 #include "feats/tier0hook.hpp"
+#include "feats/autoupdate.hpp"
 
 #include "libmem/libmem.h"
 #include <curl/curl.h>
@@ -146,6 +147,7 @@ static void setup()
 	setenv("LD_LIBRARY_PATH", ldLibPath.c_str(), true);
 
 	Updater::init();
+	AutoUpdate::checkAndPrompt();
 
 	setupSuccess = true;
 }

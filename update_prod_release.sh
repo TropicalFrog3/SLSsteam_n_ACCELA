@@ -20,7 +20,7 @@ cp "$SLS_DIR/bin/SLSsteam.so" "$PROD_SLS_DIR/bin/"
 cp "$SLS_DIR/bin/library-inject.so" "$PROD_SLS_DIR/bin/"
 cp "$SLS_DIR/res/updates.yaml" "$PROD_SLS_DIR/res/"
 cp "$SLS_DIR/res/config.yaml" "$PROD_SLS_DIR/res/"
-cp "$SLS_DIR/res/version.txt" "$PROD_SLS_DIR/res/"
+cp "$SLS_DIR/res/version" "$PROD_SLS_DIR/res/"
 
 echo "Updating prod-release for ACCELA..."
 mkdir -p "$PROD_ACCELA_DIR/bin"
