@@ -1,9 +1,13 @@
 Version: beta-v1.0.2
 Changelog: |
-  New Features & Refactors (since beta-v1.0.1)
-  - Added auto-update capability at launch with interactive Zenity prompts
-  - Added DepotKeys module to inject decryption keys and ownership tickets directly from Lua plugins
-  - Implemented manual file installation endpoint
-  - Modularized JS injection by moving scripts to external files with a robust resource loader
-  - Optimized injection frequency and removed unnecessary success modal UI components
+  This release includes major improvements
+
+  ### Fixes & Improvements
+  - **JS Injection**: Modularized JavaScript injection by moving scripts to external files with a robust resource loader.
+  - **Performance**: Optimized injection frequency and removed unnecessary success modal UI components.
+
+  ### New Features
+  - **Auto-Update**: Added auto-update capability at launch with interactive Zenity prompts.
+  - **DepotKeys**: Added DepotKeys module to inject decryption keys and ownership tickets directly from Lua plugins.
+  - **Install Endpoint**: Implemented manual file installation endpoint.
 DownloadUrl: https://github.com/TropicalFrog3/SLSsteam_n_ACCELA/releases/download/${version}/SLSsteam-n-ACCELA.zip
