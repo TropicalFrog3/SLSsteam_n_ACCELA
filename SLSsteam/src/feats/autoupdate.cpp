@@ -6,6 +6,7 @@
 #include <yaml-cpp/yaml.h>
 #include <curl/curl.h>
 #include <sys/wait.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <filesystem>
 #include <fstream>
@@ -308,10 +309,40 @@ namespace AutoUpdate
             return;
         }
 
-        // Extract successful! Copy binaries and resources safely
-        int copiedCount = 0;
-        try
+        // Instead of copying .so files while Steam is running (which crashes it),
+        // we write a helper script that kills Steam first, then copies, then relaunches.
+        g_pLog->info("AutoUpdate: Preparing update installer script...\n");
+        system("notify-send -u normal \"SLSsteam\" \"Update downloaded! Applying update, please wait...\"");
+
+        // Build the helper script that runs after Steam exits
+        // IMPORTANT: Script name must NOT contain "steam" to avoid pkill/pgrep self-match
+        std::string scriptPath = "/tmp/sls_patcher.sh";
         {
+            std::ofstream script(scriptPath);
+            if (!script.is_open())
+            {
+                g_pLog->warn("AutoUpdate: Failed to create update script at %s\n", scriptPath.c_str());
+                system("notify-send -u critical \"SLSsteam\" \"Update failed: Could not create update script.\"");
+                std::filesystem::remove(archivePath);
+                std::filesystem::remove_all(extractDir);
+                return;
+            }
+
+            script << "#!/bin/bash\n";
+            script << "# Auto-generated patcher script\n";
+            script << "sleep 1\n";
+
+            // Gracefully shut down Steam, then force-kill if needed
+            script << "steam -shutdown 2>/dev/null || true\n";
+            script << "sleep 5\n";
+            // Force-kill any remaining steam processes (but exclude this script via grep -v)
+            script << "pkill -9 -x steam 2>/dev/null || true\n";
+            script << "sleep 2\n";
+            // Wait until the main steam binary is gone (match exact name, not this script)
+            script << "while pgrep -x steam > /dev/null 2>&1; do sleep 1; done\n";
+            script << "sleep 1\n";
+
+            // Copy all files from extract dir to install dir
             for (const auto& entry : std::filesystem::recursive_directory_iterator(extractDir))
             {
                 if (!entry.is_regular_file()) continue;
@@ -334,35 +365,50 @@ namespace AutoUpdate
                     size_t resPos = pathStr.find("/res/");
                     if (resPos != std::string::npos)
                     {
-                        std::string relativeResPath = pathStr.substr(resPos + 5); // +5 for "/res/"
+                        std::string relativeResPath = pathStr.substr(resPos + 5);
                         destPath = std::filesystem::path(installDir) / "res" / relativeResPath;
                     }
                 }
 
                 if (!destPath.empty())
                 {
-                    std::filesystem::create_directories(destPath.parent_path());
-                    std::filesystem::copy_file(entry.path(), destPath, std::filesystem::copy_options::overwrite_existing);
-                    g_pLog->info("AutoUpdate: Copied %s -> %s\n", filename.c_str(), destPath.c_str());
-                    copiedCount++;
+                    // Ensure parent directory exists
+                    script << "mkdir -p \"" << destPath.parent_path().string() << "\"\n";
+                    script << "cp -f \"" << entry.path().string() << "\" \"" << destPath.string() << "\"\n";
+                    g_pLog->info("AutoUpdate: Queued copy %s -> %s\n", filename.c_str(), destPath.c_str());
                 }
             }
+
+            // Clean up temp files
+            script << "rm -f \"" << archivePath << "\"\n";
+            script << "rm -rf \"" << extractDir << "\"\n";
+
+            // Notify and relaunch Steam
+            script << "notify-send -u normal \"SLSsteam\" \"Update installed! Relaunching Steam...\"\n";
+            script << "sleep 1\n";
+            script << "nohup steam </dev/null >/dev/null 2>&1 &\n";
+
+            // Self-delete
+            script << "rm -f \"" << scriptPath << "\"\n";
         }
-        catch (const std::exception& e)
+
+        // Make executable and launch detached
+        chmod(scriptPath.c_str(), 0755);
+
+        pid_t scriptPid = fork();
+        if (scriptPid == 0)
         {
-            g_pLog->warn("AutoUpdate: Error copying updated files: %s\n", e.what());
-            system("notify-send -u critical \"SLSsteam\" \"Update failed: Error copying new files.\"");
-            std::filesystem::remove(archivePath);
-            std::filesystem::remove_all(extractDir);
-            return;
+            // Child: detach completely and run the update script
+            setsid();
+            // Close inherited file descriptors to fully detach from Steam
+            close(STDIN_FILENO);
+            close(STDOUT_FILENO);
+            close(STDERR_FILENO);
+            execlp("bash", "bash", scriptPath.c_str(), nullptr);
+            _exit(127);
         }
 
-        g_pLog->info("AutoUpdate: Successfully installed update! Copied %d files.\n", copiedCount);
-        system("notify-send -u normal \"SLSsteam\" \"Update installed! Restart Steam for changes to take effect.\"");
-
-        // Clean up temp files
-        std::filesystem::remove(archivePath);
-        std::filesystem::remove_all(extractDir);
+        g_pLog->info("AutoUpdate: Update script launched (PID %d). Steam will restart shortly.\n", scriptPid);
     }
 
     void checkAndPrompt()
