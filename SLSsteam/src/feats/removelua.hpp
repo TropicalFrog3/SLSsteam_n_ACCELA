@@ -8,8 +8,4 @@ namespace RemoveLua
      */
     bool injectRemoveLuaScript();
 
-    /**
-     * Remove the injected script from steamui/index.html.
-     */
-    void removeRemoveLuaScript();
 }

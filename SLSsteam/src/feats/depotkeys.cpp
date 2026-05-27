@@ -37,7 +37,7 @@ void DepotKeys::scanLuaPluginsForDepotKeys()
 	std::string pluginDir = g_config.getPluginDir();
 	if (pluginDir.empty())
 	{
-		g_pLog->warn("DepotKeys: Cannot locate plugin directory\n");
+		g_pLog->info("DepotKeys: Cannot locate plugin directory\n");
 		return;
 	}
 
@@ -88,13 +88,13 @@ void DepotKeys::scanLuaPluginsForDepotKeys()
 				}
 				else
 				{
-					g_pLog->warn("DepotKeys: Unexpected key length %zu for depot %u\n",
+					g_pLog->info("DepotKeys: Unexpected key length %zu for depot %u\n",
 								 hexKey.size(), depotId);
 				}
 			}
 			catch (...)
 			{
-				g_pLog->warn("DepotKeys: Failed to parse depot key in %s\n",
+				g_pLog->info("DepotKeys: Failed to parse depot key in %s\n",
 							 entry.path().c_str());
 			}
 		}
@@ -169,7 +169,7 @@ static void handleDepotDecryptionKeyResponse(CProtoBufMsgBase* msg)
 	}
 	else
 	{
-		g_pLog->warn("DepotKeys: Failed to parse depot key response for depot %u\n", depotId);
+		g_pLog->info("DepotKeys: Failed to parse depot key response for depot %u\n", depotId);
 	}
 }
 
@@ -217,7 +217,7 @@ static void handleOwnershipTicketResponse(CProtoBufMsgBase* msg)
 	}
 	else
 	{
-		g_pLog->warn("DepotKeys: Failed to parse ownership ticket response for app %u\n", appId);
+		g_pLog->info("DepotKeys: Failed to parse ownership ticket response for app %u\n", appId);
 	}
 }
 

@@ -116,7 +116,7 @@ namespace LuaDownload
 
     // ── Steam path detection ───────────────────────────────────────────
 
-    static std::string findSteamRoot()
+    std::string findSteamRoot()
     {
         const char* home = getenv("HOME");
         if (!home) return {};

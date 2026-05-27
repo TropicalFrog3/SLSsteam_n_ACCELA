@@ -131,6 +131,8 @@ install_slssteam()
 	fi
 
 	cp -v ./bin/* "$SLSDIR/"
+	mkdir -p "$SLSDIR/res"
+	cp -rv ./res/* "$SLSDIR/res/"
 }
 
 install_flatpak()
@@ -159,6 +161,8 @@ install_flatpak()
 	fi
 
 	cp -v ./bin/* "$FLATPAK_SLSDIR/"
+	mkdir -p "$FLATPAK_SLSDIR/res"
+	cp -rv ./res/* "$FLATPAK_SLSDIR/res/"
 
 	flatpak override --user --env=LD_AUDIT="$FLATPAK_LD_AUDIT" --env=SHARED_LIBRARY_GUARD=0 "$FLATPAK_APP_ID"
 

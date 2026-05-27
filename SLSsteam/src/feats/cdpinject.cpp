@@ -4,6 +4,9 @@
 #include "apps.hpp"
 
 #include <cstring>
+#include <dlfcn.h>
+#include <filesystem>
+#include <fstream>
 #include <random>
 #include <set>
 #include <sstream>
@@ -362,21 +365,21 @@ namespace CDPInject
 
         if (!parseWsUrl(wsUrl, host, port, path))
         {
-            g_pLog->debug("CDPInject: Failed to parse WS URL: %s\n", wsUrl.c_str());
+            g_pLog->info("CDPInject: Failed to parse WS URL: %s\n", wsUrl.c_str());
             return false;
         }
 
         int sock = tcpConnect(host.c_str(), port);
         if (sock < 0)
         {
-            g_pLog->debug("CDPInject: Failed to connect to %s:%d\n", host.c_str(), port);
+            g_pLog->info("CDPInject: Failed to connect to %s:%d\n", host.c_str(), port);
             return false;
         }
 
         std::string wsKey = generateWsKey();
         if (!wsHandshake(sock, host, port, path, wsKey))
         {
-            g_pLog->debug("CDPInject: WebSocket handshake failed for %s\n", wsUrl.c_str());
+            g_pLog->info("CDPInject: WebSocket handshake failed for %s\n", wsUrl.c_str());
             close(sock);
             return false;
         }
@@ -402,7 +405,7 @@ namespace CDPInject
 
         if (!wsSendText(sock, cdpPayload))
         {
-            g_pLog->debug("CDPInject: Failed to send CDP payload to %s\n", wsUrl.c_str());
+            g_pLog->info("CDPInject: Failed to send CDP payload to %s\n", wsUrl.c_str());
             close(sock);
             return false;
         }
@@ -410,6 +413,8 @@ namespace CDPInject
         // Read the response (we don't really need it, but consume it to be clean)
         std::string response = wsRecvFrame(sock);
         (void)response;
+
+        g_pLog->info("CDPInject: Successfully injected JS into target WebSocket: %s\n", wsUrl.c_str());
 
         close(sock);
         return true;
@@ -630,248 +635,139 @@ namespace CDPInject
         return httpStatus;
     }
 
+    std::string loadResourceFile(const std::string& filename)
+    {
+        std::vector<std::string> paths;
+
+        // 1. Try to resolve relative to SLSsteam.so location using dladdr
+        Dl_info info;
+        if (dladdr((void*)loadResourceFile, &info) && info.dli_fname)
+        {
+            try
+            {
+                std::filesystem::path libPath(info.dli_fname);
+                std::filesystem::path libDir = libPath.parent_path();
+                paths.push_back((libDir / filename).string());
+                paths.push_back((libDir / "res" / "inject-scripts" / filename).string());
+                paths.push_back((libDir / ".." / "res" / "inject-scripts" / filename).string());
+            }
+            catch (...) {}
+        }
+
+        // 2. Add current working directory candidates
+        paths.push_back(filename);
+        paths.push_back("./res/inject-scripts/" + filename);
+        paths.push_back("../res/inject-scripts/" + filename);
+
+        // 3. Add home folder ~/.local/share/SLSsteam candidates
+        const char* home = getenv("HOME");
+        if (home)
+        {
+            paths.push_back(std::string(home) + "/.local/share/SLSsteam/" + filename);
+            paths.push_back(std::string(home) + "/.local/share/SLSsteam/res/inject-scripts/" + filename);
+        }
+
+        for (const auto& path : paths) {
+            std::ifstream file(path, std::ios::binary);
+            if (file.is_open()) {
+                g_pLog->info("CDPInject::loadResourceFile: Successfully loaded %s from %s\n", filename.c_str(), path.c_str());
+                std::stringstream buffer;
+                buffer << file.rdbuf();
+                return buffer.str();
+            }
+        }
+
+        g_pLog->info("CDPInject::loadResourceFile: Could not find %s in any candidate path!\n", filename.c_str());
+        return "";
+    }
+
+    bool isScriptInjected(const std::string& wsUrl, const std::string& checkExpression)
+    {
+        std::string host;
+        int port = 0;
+        std::string path;
+
+        if (!parseWsUrl(wsUrl, host, port, path))
+        {
+            g_pLog->info("CDPInject: Failed to parse WS URL for check: %s\n", wsUrl.c_str());
+            return false;
+        }
+
+        int sock = tcpConnect(host.c_str(), port);
+        if (sock < 0)
+        {
+            return false;
+        }
+
+        std::string wsKey = generateWsKey();
+        if (!wsHandshake(sock, host, port, path, wsKey))
+        {
+            close(sock);
+            return false;
+        }
+
+        std::string checkPayload = R"({"id":777,"method":"Runtime.evaluate","params":{"expression":")" + checkExpression + R"(","returnByValue":true}})";
+        if (!wsSendText(sock, checkPayload))
+        {
+            close(sock);
+            return false;
+        }
+
+        std::string response = wsRecvFrame(sock);
+        close(sock);
+
+        if (response.find("\"value\":true") != std::string::npos)
+        {
+            return true;
+        }
+
+        return false;
+    }
+
     void injectStorePages()
     {
         auto pages = fetchPages();
         if (pages.empty()) return;
 
-        // The store page script — identical to the one from inject_cef.py
-        std::string storePageScript = R"JSRAW(
-(function() {
-    if (window.__slsLuaBtnAdded) return;
-    window.__slsLuaBtnAdded = true;
-    console.log('[SLS] Store Page Script Triggered');
-
-    function ping(msg) { console.log('[SLS] StorePage: ' + msg); }
-
-    ping('Script active on: ' + window.location.href);
-
-    var observer = null;
-    var debounceTimer = null;
-
-    // Cache of app unlock status: { appid: true/false }
-    var appUnlockStatus = {};
-
-    function setupDownloadButton(luaLink, luaBtn, productID) {
-        var span = luaLink.querySelector('span');
-        if (span) span.innerText = 'Download Lua';
-        luaLink.style.filter = 'hue-rotate(110deg) brightness(1.2)';
-        luaLink.style.pointerEvents = '';
-        luaLink.style.opacity = '';
-        luaLink.onclick = function(e) {
-            e.preventDefault();
-            e.stopPropagation();
-            var clickSpan = luaLink.querySelector('span');
-            if (clickSpan) clickSpan.innerText = 'Downloading...';
-            luaLink.style.filter = 'hue-rotate(50deg) brightness(1.0)';
-            luaLink.style.pointerEvents = 'none';
-            luaLink.style.opacity = '0.8';
-            luaBtn.dataset.slsAppid = productID;
-            ping('Lua Click: ' + productID);
-            window.location.hash = 'sls-click-' + productID + '-' + Date.now();
-        };
-    }
-
-    function setupRemoveButton(luaLink, luaBtn, productID) {
-        var span = luaLink.querySelector('span');
-        if (span) span.innerText = 'Remove Lua';
-        luaLink.style.filter = 'hue-rotate(320deg) brightness(1.1)';
-        luaLink.style.pointerEvents = '';
-        luaLink.style.opacity = '';
-        luaLink.onclick = function(e) {
-            e.preventDefault();
-            e.stopPropagation();
-
-            // Show confirmation modal
-            if (document.getElementById('sls-remove-overlay')) return;
-            var overlay = document.createElement('div');
-            overlay.id = 'sls-remove-overlay';
-            overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:999999;display:flex;justify-content:center;align-items:center;backdrop-filter:blur(5px);';
-            overlay.innerHTML = '<div style="background:#1a1c23;border:1px solid #2a2d36;border-radius:12px;padding:30px;width:400px;box-shadow:0 15px 30px rgba(0,0,0,0.5);font-family:Inter,sans-serif;color:#fff;text-align:center;">' +
-                '<h2 style="margin:0 0 10px;font-size:20px;font-weight:600;color:#e8e9eb;">Remove Lua</h2>' +
-                '<p style="margin:0 0 20px;font-size:13px;color:#8a8d96;">Remove Lua and Game files for AppID <b>' + productID + '</b>?</p>' +
-                '<div style="display:flex;justify-content:center;gap:10px;">' +
-                    '<button id="sls-rm-cancel" style="background:transparent;border:1px solid #333640;color:#e8e9eb;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;">Cancel</button>' +
-                    '<button id="sls-rm-confirm" style="background:#ff4d4d;border:none;color:#fff;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;box-shadow:0 4px 10px rgba(255,77,77,0.3);">Remove</button>' +
-                '</div>' +
-            '</div>';
-            document.body.appendChild(overlay);
-
-            document.getElementById('sls-rm-cancel').onclick = function() { overlay.remove(); };
-            document.getElementById('sls-rm-confirm').onclick = function() {
-                var confirmBtn = document.getElementById('sls-rm-confirm');
-                confirmBtn.innerText = 'Processing...';
-                confirmBtn.style.opacity = '0.5';
-                confirmBtn.style.pointerEvents = 'none';
-
-                ping('Remove Lua: ' + productID);
-                window.location.hash = 'sls-click-removelua-' + productID + '-' + Date.now();
-
-                // Update cached status
-                appUnlockStatus[productID] = false;
-
-                overlay.remove();
-
-                // Switch button back to Download Lua
-                setupDownloadButton(luaLink, luaBtn, productID);
-            };
-        };
-    }
-
-    function addButtons() {
-        if (observer) observer.disconnect();
-        var cartBtns = document.querySelectorAll('.btn_addtocart, .btn_add_to_cart');
-        cartBtns.forEach(function(cartBtn) {
-            if (cartBtn.dataset.slsProcessed) return;
-            if (cartBtn.classList.contains('sls-lua-btn')) return;
-            var link = cartBtn.querySelector('a');
-            if (!link) return;
-            var hrefLower = link.href.toLowerCase();
-            if (hrefLower.indexOf('bundle') !== -1 || hrefLower.indexOf('dlc') !== -1) return;
-            var productID = null;
-            var match = window.location.href.match(/\/(app|sub)\/([0-9]+)/);
-            if (match) {
-                productID = match[2];
-            }
-            if (productID) {
-                cartBtn.dataset.slsProcessed = '1';
-                var luaBtn = cartBtn.cloneNode(true);
-                luaBtn.classList.remove('btn_addtocart');
-                luaBtn.classList.remove('btn_add_to_cart');
-                luaBtn.classList.add('sls-lua-btn');
-                luaBtn.dataset.slsProcessed = '1';
-                luaBtn.style.display = 'inline-block';
-                luaBtn.style.marginLeft = '8px';
-                var luaLink = luaBtn.querySelector('a');
-                if (luaLink) {
-                    luaLink.href = 'javascript:void(0)';
-                    luaLink.removeAttribute('id');
-
-                    // Default to Download Lua, then check if already unlocked
-                    setupDownloadButton(luaLink, luaBtn, productID);
-
-                    // Check unlock status via callback server
-                    if (appUnlockStatus[productID] !== undefined) {
-                        // Use cached status
-                        if (appUnlockStatus[productID]) {
-                            setupRemoveButton(luaLink, luaBtn, productID);
-                        }
-                    } else {
-                        // Query the server
-                        (function(ll, lb, pid) {
-                            fetch('http://127.0.0.1:9001/check?id=' + pid)
-                                .then(function(r) { return r.json(); })
-                                .then(function(data) {
-                                    var isUnlocked = data.exists || data.pending;
-                                    appUnlockStatus[pid] = isUnlocked;
-                                    if (isUnlocked) {
-                                        setupRemoveButton(ll, lb, pid);
-                                    }
-                                })
-                                .catch(function() {
-                                    ping('Check failed for ' + pid + ', defaulting to Download');
-                                });
-                        })(luaLink, luaBtn, productID);
-                    }
-                }
-                cartBtn.parentNode.insertBefore(luaBtn, cartBtn.nextSibling);
-                // Settings button
-                var setBtn = cartBtn.cloneNode(true);
-                setBtn.classList.remove('btn_addtocart', 'btn_add_to_cart');
-                setBtn.classList.add('sls-settings-btn');
-                setBtn.dataset.slsProcessed = '1';
-                setBtn.style.display = 'inline-block';
-                setBtn.style.marginLeft = '4px';
-                var setLink = setBtn.querySelector('a');
-                if (setLink) {
-                    setLink.href = 'javascript:void(0)';
-                    setLink.removeAttribute('id');
-                    var spanSet = setLink.querySelector('span');
-                    if (spanSet) spanSet.innerText = 'Settings';
-                    setLink.style.filter = 'hue-rotate(200deg) brightness(1.1)';
-                    setLink.style.padding = '0 10px';
-                    setLink.onclick = function(e) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        openSlsSettings();
-                    };
-                }
-                luaBtn.parentNode.insertBefore(setBtn, luaBtn.nextSibling);
-            }
-        });
-        if (observer && document.body) observer.observe(document.body, { childList: true, subtree: true });
-    }
-
-    function openSlsSettings() {
-        if (document.getElementById('sls-overlay-modal')) return;
-        var overlay = document.createElement('div');
-        overlay.id = 'sls-overlay-modal';
-        overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:999999;display:flex;justify-content:center;align-items:center;backdrop-filter:blur(5px);';
-        overlay.innerHTML = '<div style="background:#1a1c23;border:1px solid #2a2d36;border-radius:12px;padding:30px;width:450px;box-shadow:0 15px 30px rgba(0,0,0,0.5);font-family:Inter,sans-serif;color:#fff;">' +
-            '<h2 style="margin:0 0 10px;font-size:20px;font-weight:600;color:#e8e9eb;">API Settings</h2>' +
-            '<p style="margin:0 0 20px;font-size:13px;color:#8a8d96;">Configure your credentials for 3rd-party download APIs.</p>' +
-            '<label style="display:flex;justify-content:space-between;margin-bottom:8px;font-size:12px;font-weight:500;color:#b4b6bc;">' +
-            '<span>Morrenus API Key</span>' +
-            '<a href="https://manifest.morrenus.xyz/api-keys/stats" target="_blank" style="color:#007bff;text-decoration:none;cursor:pointer;">Get Key</a>' +
-            '</label>' +
-            '<input id="sls-morr" type="text" value="%MORR_KEY%" style="width:100%;box-sizing:border-box;background:#0d0e12;border:1px solid #333640;color:#fff;padding:10px 12px;border-radius:6px;margin-bottom:15px;font-family:monospace;font-size:13px;outline:none;" placeholder="Optional..."/>' +
-            '<label style="display:flex;justify-content:space-between;margin-bottom:8px;font-size:12px;font-weight:500;color:#b4b6bc;">' +
-            '<span>Ryuu API Key</span>' +
-            '<a href="https://generator.ryuu.lol/" target="_blank" style="color:#007bff;text-decoration:none;cursor:pointer;">Get Key</a>' +
-            '</label>' +
-            '<input id="sls-ryuu" type="text" value="%RYUU_KEY%" style="width:100%;box-sizing:border-box;background:#0d0e12;border:1px solid #333640;color:#fff;padding:10px 12px;border-radius:6px;margin-bottom:25px;font-family:monospace;font-size:13px;outline:none;" placeholder="Optional..."/>' +
-            '<div style="display:flex;justify-content:flex-end;gap:10px;">' +
-                '<button id="sls-cancel" style="background:transparent;border:1px solid #333640;color:#e8e9eb;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;">Cancel</button>' +
-                '<button id="sls-save" style="background:#007bff;border:none;color:#fff;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;box-shadow:0 4px 10px rgba(0,123,255,0.3);">Save</button>' +
-            '</div>' +
-        '</div>';
-        document.body.appendChild(overlay);
-        
-        document.getElementById('sls-cancel').onclick = function() { overlay.remove(); };
-        document.getElementById('sls-save').onclick = function() {
-            var morr = document.getElementById('sls-morr').value;
-            var ryuu = document.getElementById('sls-ryuu').value;
-            window.location.hash = 'sls-auth-MORR=' + encodeURIComponent(morr) + '&RYUU=' + encodeURIComponent(ryuu) + '-TS=' + Date.now();
-            overlay.remove();
-            
-            // Brief success toast
-            var toast = document.createElement('div');
-            toast.innerText = 'API Settings Saved!';
-            toast.style.cssText = 'position:fixed;bottom:30px;right:30px;background:#28a745;color:#fff;padding:12px 20px;border-radius:8px;font-family:Inter,sans-serif;font-weight:500;z-index:999999;box-shadow:0 5px 15px rgba(0,0,0,0.3);transition:opacity 0.5s;';
-            document.body.appendChild(toast);
-            setTimeout(function(){ toast.style.opacity = '0'; }, 2000);
-            setTimeout(function(){ toast.remove(); }, 2500);
-        };
-    }
-
-    function debouncedAddButtons() {
-        if (debounceTimer) return;
-        debounceTimer = requestAnimationFrame(function() {
-            debounceTimer = null;
-            addButtons();
-        });
-    }
-
-    addButtons();
-    observer = new MutationObserver(debouncedAddButtons);
-    if (document.body) observer.observe(document.body, { childList: true, subtree: true });
-})();
-)JSRAW";
-
-        std::string morrKey = g_config.morrenusKey.get();
-        std::string ryuuKey = g_config.ryuuKey.get();
-
-        size_t pos;
-        if ((pos = storePageScript.find("%MORR_KEY%")) != std::string::npos)
-            storePageScript.replace(pos, 10, morrKey);
-        if ((pos = storePageScript.find("%RYUU_KEY%")) != std::string::npos)
-            storePageScript.replace(pos, 10, ryuuKey);
+        std::vector<std::string> pagesToInject;
         for (auto& page : pages)
         {
             if (page.url.find("store.steampowered.com") != std::string::npos && !page.webSocketDebuggerUrl.empty())
             {
-                injectJS(page.webSocketDebuggerUrl, storePageScript);
+                if (!isScriptInjected(page.webSocketDebuggerUrl, "!!window.__slsLuaBtnAdded"))
+                {
+                    pagesToInject.push_back(page.webSocketDebuggerUrl);
+                }
             }
+        }
+
+        if (pagesToInject.empty()) return;
+
+        // Lazy-loaded cache
+        static std::string cachedStorePageScript;
+        if (cachedStorePageScript.empty())
+        {
+            std::string storePageScript = loadResourceFile("store-page-script.js");
+            if (storePageScript.empty()) {
+                g_pLog->debug("CDPInject::injectStorePages: Failed to load store-page-script.js\n");
+                return;
+            }
+
+            std::string morrKey = g_config.morrenusKey.get();
+            std::string ryuuKey = g_config.ryuuKey.get();
+
+            size_t pos;
+            if ((pos = storePageScript.find("%MORR_KEY%")) != std::string::npos)
+                storePageScript.replace(pos, 10, morrKey);
+            if ((pos = storePageScript.find("%RYUU_KEY%")) != std::string::npos)
+                storePageScript.replace(pos, 10, ryuuKey);
+
+            cachedStorePageScript = std::move(storePageScript);
+        }
+
+        for (const auto& wsUrl : pagesToInject)
+        {
+            injectJS(wsUrl, cachedStorePageScript);
         }
     }
 }

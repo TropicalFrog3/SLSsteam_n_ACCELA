@@ -30,6 +30,12 @@ namespace CDPInject
     bool injectJS(const std::string& wsUrl, const std::string& jsCode);
 
     /**
+     * Check if a script has already been injected by evaluating an expression (e.g. "!!window.__slsLuaBtnAdded").
+     * Returns true if the expression evaluates to true, false otherwise.
+     */
+    bool isScriptInjected(const std::string& wsUrl, const std::string& checkExpression);
+
+    /**
      * Run the full injection pass: fetch pages, filter for Steam store
      * pages, and inject the "Download Lua" button script into each.
      *

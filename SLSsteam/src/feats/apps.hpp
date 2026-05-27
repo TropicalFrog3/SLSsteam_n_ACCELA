@@ -28,12 +28,20 @@ namespace Apps
 
 
 	extern std::set<uint32_t> installedApps;
+	extern std::set<uint32_t> onlineFixApps;
+	extern std::set<uint32_t> autoCrackApps;
 
 	bool isInstalled(uint32_t appId);
 	void setInstalled(uint32_t appId);
 	void removeInstalled(uint32_t appId);
 	void deleteGameFiles(uint32_t appId);
 	bool gameFilesExist(uint32_t appId);
+
+	bool isOnlineFixInstalled(uint32_t appId);
+	void setOnlineFixInstalled(uint32_t appId, bool installed);
+
+	bool isAutoCrackInstalled(uint32_t appId);
+	void setAutoCrackInstalled(uint32_t appId, bool installed);
 
 	void sendGamesPlayed(CMsgClientGamesPlayed* msg);
 	void sendPICSInfoRequest(CMsgClientPICSProductInfoRequest* msg);

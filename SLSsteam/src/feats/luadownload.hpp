@@ -17,5 +17,6 @@ namespace LuaDownload
      * This runs synchronously — call from a detached thread.
      * Returns true if the download and install succeeded.
      */
+    std::string findSteamRoot();
     bool downloadAndInstall(const std::string& appId);
 }

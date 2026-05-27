@@ -19,12 +19,101 @@
 bool Apps::applistRequested;
 std::map<uint32_t, int> Apps::appIdOwnerOverride;
 std::set<uint32_t> Apps::installedApps;
+std::set<uint32_t> Apps::onlineFixApps;
+std::set<uint32_t> Apps::autoCrackApps;
 
+static std::filesystem::path getAppsJsonPath()
+{
+    const char* home = getenv("HOME");
+    if (!home) return "";
+    return std::filesystem::path(home) / ".SLSsteam.json";
+}
+
+static void saveAppsJson()
+{
+    auto path = getAppsJsonPath();
+    if (path.empty()) return;
+
+    std::ofstream file(path, std::ios::trunc);
+    file << "{\n";
+    file << "  \"installed\": [";
+    bool first = true;
+    for (auto id : Apps::installedApps)
+    {
+        if (!first) file << ", ";
+        file << id;
+        first = false;
+    }
+    file << "],\n";
+    file << "  \"onlinefix\": [";
+    first = true;
+    for (auto id : Apps::onlineFixApps)
+    {
+        if (!first) file << ", ";
+        file << id;
+        first = false;
+    }
+    file << "],\n";
+    file << "  \"autocrack\": [";
+    first = true;
+    for (auto id : Apps::autoCrackApps)
+    {
+        if (!first) file << ", ";
+        file << id;
+        first = false;
+    }
+    file << "]\n";
+    file << "}\n";
+}
+
+static void parseJsonArray(const std::string& content, const std::string& key, std::set<uint32_t>& target)
+{
+    target.clear();
+    size_t keyPos = content.find("\"" + key + "\"");
+    if (keyPos == std::string::npos) return;
+    size_t startBracket = content.find("[", keyPos);
+    if (startBracket == std::string::npos) return;
+    size_t endBracket = content.find("]", startBracket);
+    if (endBracket == std::string::npos) return;
+    
+    std::string arrayStr = content.substr(startBracket + 1, endBracket - startBracket - 1);
+    std::stringstream ss(arrayStr);
+    std::string token;
+    while (std::getline(ss, token, ','))
+    {
+        size_t first = token.find_first_not_of(" \t\r\n");
+        if (first == std::string::npos) continue;
+        size_t last = token.find_last_not_of(" \t\r\n");
+        std::string valStr = token.substr(first, (last - first + 1));
+        if (!valStr.empty())
+        {
+            try {
+                target.insert(std::stoul(valStr));
+            } catch (...) {}
+        }
+    }
+}
+
+// Keep the old path functions temporarily for migration
 static std::filesystem::path getInstalledAppsPath()
 {
     const char* home = getenv("HOME");
     if (!home) return "";
     return std::filesystem::path(home) / ".SLSsteam.installed";
+}
+
+static std::filesystem::path getOnlineFixAppsPath()
+{
+    const char* home = getenv("HOME");
+    if (!home) return "";
+    return std::filesystem::path(home) / ".SLSsteam.onlinefix";
+}
+
+static std::filesystem::path getAutoCrackAppsPath()
+{
+    const char* home = getenv("HOME");
+    if (!home) return "";
+    return std::filesystem::path(home) / ".SLSsteam.autocrack";
 }
 
 static void reloadInstalledApps()
@@ -39,9 +128,70 @@ static void reloadInstalledApps()
         Apps::installedApps.insert(id);
     }
 }
+
+static void reloadOnlineFixApps()
+{
+    auto path = getOnlineFixAppsPath();
+    if (path.empty() || !std::filesystem::exists(path)) return;
+
+    std::ifstream file(path);
+    uint32_t id;
+    while (file >> id)
+    {
+        Apps::onlineFixApps.insert(id);
+    }
+}
+
+static void reloadAutoCrackApps()
+{
+    auto path = getAutoCrackAppsPath();
+    if (path.empty() || !std::filesystem::exists(path)) return;
+
+    std::ifstream file(path);
+    uint32_t id;
+    while (file >> id)
+    {
+        Apps::autoCrackApps.insert(id);
+    }
+}
+
+static void reloadAppsJson()
+{
+    auto path = getAppsJsonPath();
+    if (path.empty()) return;
+
+    if (!std::filesystem::exists(path))
+    {
+        // Migrate old files if present
+        reloadInstalledApps();
+        reloadOnlineFixApps();
+        reloadAutoCrackApps();
+        
+        saveAppsJson();
+
+        // Delete old files after migration
+        auto oldInst = getInstalledAppsPath();
+        if (!oldInst.empty() && std::filesystem::exists(oldInst)) std::filesystem::remove(oldInst);
+        auto oldFix = getOnlineFixAppsPath();
+        if (!oldFix.empty() && std::filesystem::exists(oldFix)) std::filesystem::remove(oldFix);
+        auto oldCrack = getAutoCrackAppsPath();
+        if (!oldCrack.empty() && std::filesystem::exists(oldCrack)) std::filesystem::remove(oldCrack);
+        return;
+    }
+
+    std::ifstream file(path);
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    std::string content = buffer.str();
+
+    parseJsonArray(content, "installed", Apps::installedApps);
+    parseJsonArray(content, "onlinefix", Apps::onlineFixApps);
+    parseJsonArray(content, "autocrack", Apps::autoCrackApps);
+}
+
 void Apps::init()
 {
-    reloadInstalledApps();
+    reloadAppsJson();
 }
 
 bool Apps::isInstalled(uint32_t appId)
@@ -53,29 +203,46 @@ void Apps::setInstalled(uint32_t appId)
 {
     g_pLog->info("Apps::setInstalled(%u)\n", appId);
     installedApps.insert(appId);
-
-    auto path = getInstalledAppsPath();
-    if (path.empty()) return;
-
-    std::ofstream file(path, std::ios::app);
-    file << appId << std::endl;
+    saveAppsJson();
 }
 
 void Apps::removeInstalled(uint32_t appId)
 {
     g_pLog->info("Apps::removeInstalled(%u)\n", appId);
     installedApps.erase(appId);
+    saveAppsJson();
+}
 
-    auto path = getInstalledAppsPath();
-	g_pLog->info("removeInstalled: Path: %s\n", path.string().c_str());
-    if (path.empty()) return;
+bool Apps::isOnlineFixInstalled(uint32_t appId)
+{
+    return onlineFixApps.contains(appId);
+}
 
-    // Rewrite the persistence file without the removed appId
-    std::ofstream file(path, std::ios::trunc);
-    for (auto id : installedApps)
-    {
-        file << id << std::endl;
+void Apps::setOnlineFixInstalled(uint32_t appId, bool installed)
+{
+    g_pLog->info("Apps::setOnlineFixInstalled(%u, %d)\n", appId, installed);
+    if (installed) {
+        onlineFixApps.insert(appId);
+    } else {
+        onlineFixApps.erase(appId);
     }
+    saveAppsJson();
+}
+
+bool Apps::isAutoCrackInstalled(uint32_t appId)
+{
+    return autoCrackApps.contains(appId);
+}
+
+void Apps::setAutoCrackInstalled(uint32_t appId, bool installed)
+{
+    g_pLog->info("Apps::setAutoCrackInstalled(%u, %d)\n", appId, installed);
+    if (installed) {
+        autoCrackApps.insert(appId);
+    } else {
+        autoCrackApps.erase(appId);
+    }
+    saveAppsJson();
 }
 
 static std::vector<std::filesystem::path> getSteamLibraryPaths()

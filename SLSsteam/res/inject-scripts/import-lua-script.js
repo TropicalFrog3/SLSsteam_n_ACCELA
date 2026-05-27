@@ -8,6 +8,31 @@
         fetch('http://127.0.0.1:9001/log?msg=' + encodeURIComponent('[RemoveLua] ' + m)).catch(function () { });
     }
 
+    // Dynamically load JSZip library for client-side zip extraction
+    var _jszipPromise = null;
+    function loadJSZip() {
+        if (typeof JSZip !== 'undefined') return Promise.resolve(JSZip);
+        if (_jszipPromise) return _jszipPromise;
+        _jszipPromise = new Promise(function (resolve, reject) {
+            var script = document.createElement('script');
+            script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+            script.onload = function () {
+                if (typeof JSZip !== 'undefined') {
+                    log('JSZip loaded successfully');
+                    resolve(JSZip);
+                } else {
+                    reject(new Error('JSZip not available after script load'));
+                }
+            };
+            script.onerror = function () {
+                _jszipPromise = null;
+                reject(new Error('Failed to load JSZip from CDN'));
+            };
+            document.head.appendChild(script);
+        });
+        return _jszipPromise;
+    }
+
     // Known Steam CSS class names (hashed, from CEF inspection)
     var STEAM_NAV_CONTAINER_CLASS = '_2D64jIEK7wpUR_NlObDW76';
     var STEAM_TAB_BASE_CLASS = '_2Lu3d-5qLmW4i19ysTt2jT';
@@ -141,14 +166,11 @@
             '<div style="display: flex; flex-direction: column; gap: 0;">' +
             // Single Column: Upload Zone, File List, AppID, and Install
             '<div style="width: 100%; box-sizing: border-box; background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 16px; padding: 32px; display: flex; flex-direction: column; overflow: hidden;">' +
-            '<div id="sls-appid-container" style="background: rgba(255, 255, 255, 0.02); border: 1px dashed rgba(255, 255, 255, 0.1); border-radius: 12px; padding: 20px; margin-bottom: 24px; text-align: center; display: none; flex-direction: column; align-items: center; justify-content: center; min-height: 60px;">' +
-            '</div>' +
             '<div id="sls-manual-dropzone" style="min-height: 180px; border: 2px dashed rgba(255, 255, 255, 0.15); border-radius: 12px; background: rgba(0,0,0,0.15); display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 30px; text-align: center; cursor: pointer; transition: all 0.2s;">' +
             '<svg style="width: 48px; height: 48px; color: #66c0f4; margin-bottom: 16px;" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">' +
             '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>' +
             '</svg>' +
-            '<p style="margin: 0; font-size: 15px; font-weight: 600; color: #fff;">Drag & drop your files here</p>' +
-            '<p style="margin: 6px 0 0; font-size: 12px; color: #8f98a0;">Supports .zip, .lua, .manifest, or entire folders</p>' +
+            '<p style="margin: 0; font-size: 15px; font-weight: 600; color: #fff;">Supports .zip, .lua, .manifest, or entire folders</p>' +
             '<div style="margin-top: 20px; display: flex; gap: 10px;">' +
             '<button id="sls-manual-select-files" style="background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: #fff; padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer; transition: background 0.2s; outline: none;">' +
             'Select Files' +
@@ -164,7 +186,7 @@
             '<div id="sls-manual-status" style="margin-bottom: 12px; font-size: 14px; text-align: center; color: #8f98a0; font-weight: 600;">' +
             '</div>' +
             '<button id="sls-manual-submit" disabled style="width: 100%; background: rgba(255, 255, 255, 0.05); border: none; border-radius: 8px; color: rgba(255,255,255,0.3); padding: 16px; font-size: 15px; font-weight: 700; cursor: not-allowed; outline: none;">' +
-            'Install Assets' +
+            'Import' +
             '</button>' +
             '</div>' +
             '</div>' +
@@ -214,7 +236,6 @@
         var submitBtn = document.getElementById('sls-manual-submit');
         var selectFilesBtn = document.getElementById('sls-manual-select-files');
         var selectFolderBtn = document.getElementById('sls-manual-select-folder');
-        var appidContainer = document.getElementById('sls-appid-container');
 
         var selectedFiles = [];
         var activeAppId = null;
@@ -288,127 +309,47 @@
             });
         }
 
-        function loadJSZip(callback) {
-            if (window.JSZip) {
-                callback();
-                return;
-            }
-            status.style.color = '#8f98a0';
-            status.innerText = 'Loading zip library...';
-            var script = document.createElement('script');
-            script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
-            script.onload = function () {
-                callback();
-            };
-            script.onerror = function () {
-                status.style.color = '#ff4d4d';
-                status.innerText = 'Error: Failed to load zip library from CDN.';
-            };
-            document.head.appendChild(script);
-        }
-
-        function unzipAndCollectFiles(files, onComplete) {
-            var filesList = Array.prototype.slice.call(files);
-            var zipFiles = filesList.filter(function (f) {
-                return f.name.toLowerCase().endsWith('.zip');
-            });
-            var nonZipFiles = filesList.filter(function (f) {
-                return !f.name.toLowerCase().endsWith('.zip');
-            });
-
-            if (zipFiles.length === 0) {
-                onComplete(nonZipFiles);
-                return;
-            }
-
-            loadJSZip(function () {
-                status.style.color = '#8f98a0';
-                status.innerText = 'Extracting zip file(s)...';
-
-                var extractedFiles = [];
-                var remainingZips = zipFiles.length;
-
-                zipFiles.forEach(function (zipFile) {
-                    var reader = new FileReader();
-                    reader.onload = function (e) {
-                        var arrayBuffer = e.target.result;
-                        window.JSZip.loadAsync(arrayBuffer)
-                            .then(function (zip) {
-                                var zipEntries = [];
-                                zip.forEach(function (relativePath, zipEntry) {
-                                    if (!zipEntry.dir) {
-                                        zipEntries.push(zipEntry);
-                                    }
-                                });
-
-                                if (zipEntries.length === 0) {
-                                    remainingZips--;
-                                    if (remainingZips === 0) {
-                                        onComplete(nonZipFiles.concat(extractedFiles));
-                                    }
-                                    return;
-                                }
-
-                                var remainingEntries = zipEntries.length;
-                                zipEntries.forEach(function (zipEntry) {
-                                    zipEntry.async('blob')
-                                        .then(function (blob) {
-                                            var filename = zipEntry.name.substring(zipEntry.name.lastIndexOf('/') + 1);
-                                            var file = new File([blob], filename, { type: blob.type });
-                                            
-                                            Object.defineProperty(file, 'webkitRelativePath', {
-                                                value: zipEntry.name,
-                                                writable: true,
-                                                enumerable: true,
-                                                configurable: true
-                                            });
-
-                                            extractedFiles.push(file);
-                                            remainingEntries--;
-                                            if (remainingEntries === 0) {
-                                                remainingZips--;
-                                                if (remainingZips === 0) {
-                                                    onComplete(nonZipFiles.concat(extractedFiles));
-                                                }
-                                            }
-                                        })
-                                        .catch(function (err) {
-                                            console.error('[SLS] Error extracting entry:', zipEntry.name, err);
-                                            remainingEntries--;
-                                            if (remainingEntries === 0) {
-                                                remainingZips--;
-                                                if (remainingZips === 0) {
-                                                    onComplete(nonZipFiles.concat(extractedFiles));
-                                                }
-                                            }
-                                        });
-                                });
+        // Extract zip files into individual File objects
+        function extractZipFiles(zipFile) {
+            return loadJSZip().then(function (JSZipLib) {
+                return JSZipLib.loadAsync(zipFile).then(function (zip) {
+                    var promises = [];
+                    zip.forEach(function (relativePath, zipEntry) {
+                        if (zipEntry.dir) return;
+                        // Only extract relevant file types
+                        var lowerName = zipEntry.name.toLowerCase();
+                        if (!lowerName.endsWith('.lua') && !lowerName.endsWith('.manifest')) return;
+                        promises.push(
+                            zipEntry.async('blob').then(function (blob) {
+                                // Use just the filename (strip directory paths inside zip)
+                                var fileName = zipEntry.name.split('/').pop();
+                                return new File([blob], fileName, { type: blob.type || 'application/octet-stream' });
                             })
-                            .catch(function (err) {
-                                status.style.color = '#ff4d4d';
-                                status.innerText = 'Error: Failed to parse zip archive: ' + zipFile.name;
-                                console.error('[SLS] JSZip parse error:', err);
-                                remainingZips--;
-                                if (remainingZips === 0) {
-                                    onComplete(nonZipFiles.concat(extractedFiles));
-                                }
-                            });
-                    };
-                    reader.onerror = function () {
-                        remainingZips--;
-                        if (remainingZips === 0) {
-                            onComplete(nonZipFiles.concat(extractedFiles));
-                        }
-                    };
-                    reader.readAsArrayBuffer(zipFile);
+                        );
+                    });
+                    return Promise.all(promises);
                 });
             });
         }
 
         function handleFiles(files) {
-            unzipAndCollectFiles(files, function (collectedFiles) {
-                // Append new files instead of overwriting, preventing duplicates
-                collectedFiles.forEach(function (newFile) {
+            var newFiles = Array.prototype.slice.call(files);
+
+            // Separate zip files from regular files, filtering regular files by extension (.lua and .manifest only)
+            var regularFiles = [];
+            var zipFiles = [];
+            newFiles.forEach(function (file) {
+                var lowerName = file.name.toLowerCase();
+                if (lowerName.endsWith('.zip')) {
+                    zipFiles.push(file);
+                } else if (lowerName.endsWith('.lua') || lowerName.endsWith('.manifest')) {
+                    regularFiles.push(file);
+                }
+            });
+
+            // Process regular files immediately
+            function addFiles(filesToAdd) {
+                filesToAdd.forEach(function (newFile) {
                     var exists = selectedFiles.some(function (existingFile) {
                         return existingFile.name === newFile.name;
                     });
@@ -416,13 +357,37 @@
                         selectedFiles.push(newFile);
                     }
                 });
+            }
 
-                loadLuaFilesCache(collectedFiles, function () {
+            if (zipFiles.length === 0) {
+                // No zips, process normally
+                addFiles(regularFiles);
+                loadLuaFilesCache(regularFiles, function () {
                     initCheckedFiles();
                     updateFileList();
-                    status.style.color = '#8f98a0';
-                    status.innerText = 'Files ready to install.';
-                    detectAppIdFromFiles();
+                });
+                return;
+            }
+
+            // Extract all zip files, then merge with regular files
+            var zipPromises = zipFiles.map(function (zf) {
+                return extractZipFiles(zf).catch(function (err) {
+                    log('Failed to extract ' + zf.name + ': ' + err.message);
+                    // If extraction fails, don't show the zip file in the list since it's not a .lua/.manifest
+                    return [];
+                });
+            });
+
+            Promise.all(zipPromises).then(function (results) {
+                var allExtracted = [];
+                results.forEach(function (extractedFiles) {
+                    allExtracted = allExtracted.concat(extractedFiles);
+                });
+                var combined = regularFiles.concat(allExtracted);
+                addFiles(combined);
+                loadLuaFilesCache(combined, function () {
+                    initCheckedFiles();
+                    updateFileList();
                 });
             });
         }
@@ -627,10 +592,63 @@
             return luaFiles[0];
         }
 
+        // Extract AppID from lua file contents by parsing addappid(XXXX) calls
+        function getAppIdFromLuaContent(luaContent) {
+            if (!luaContent) return null;
+            var match = luaContent.match(/addappid\s*\(\s*([0-9]+)\s*\)/);
+            return match ? match[1] : null;
+        }
+
+        // Find the best AppID from all checked lua files
+        function detectAppIdFromCheckedFiles() {
+            for (var i = 0; i < selectedFiles.length; i++) {
+                var file = selectedFiles[i];
+                if (file.name.toLowerCase().endsWith('.lua') && checkedFiles[file.name] !== false) {
+                    var content = luaContentsCache[file.name];
+                    var appid = getAppIdFromLuaContent(content);
+                    if (appid) return appid;
+                    // Fallback: try extracting from filename
+                    var fromName = getAppIdFromFileName(file.name);
+                    if (fromName) return fromName;
+                }
+            }
+            // Fallback: try manifest filenames
+            for (var j = 0; j < selectedFiles.length; j++) {
+                var mf = selectedFiles[j];
+                if (mf.name.toLowerCase().endsWith('.manifest') && checkedFiles[mf.name] !== false) {
+                    var mfAppId = getAppIdFromFileName(mf.name);
+                    if (mfAppId) return mfAppId;
+                }
+            }
+            return null;
+        }
+
+        // Update the submit button state based on current checked files
+        function updateSubmitButton() {
+            var hasCheckedFiles = selectedFiles.some(function (f) {
+                return checkedFiles[f.name] !== false;
+            });
+            var detectedAppId = detectAppIdFromCheckedFiles();
+            activeAppId = detectedAppId;
+
+            if (hasCheckedFiles && detectedAppId) {
+                submitBtn.disabled = false;
+                submitBtn.style.background = 'linear-gradient(90deg, #1a9fff 0%, #66c0f4 100%)';
+                submitBtn.style.color = '#fff';
+                submitBtn.style.cursor = 'pointer';
+            } else {
+                submitBtn.disabled = true;
+                submitBtn.style.background = 'rgba(255, 255, 255, 0.05)';
+                submitBtn.style.color = 'rgba(255,255,255,0.3)';
+                submitBtn.style.cursor = 'not-allowed';
+            }
+        }
+
         function updateFileList() {
             fileList.innerHTML = '';
             if (selectedFiles.length === 0) {
                 fileList.style.display = 'none';
+                updateSubmitButton();
                 return;
             }
             fileList.style.display = 'flex';
@@ -986,196 +1004,36 @@
                 item.appendChild(sizeSpan);
                 fileList.appendChild(item);
             });
-        }
 
-        function setDetectedAppId(appid, isManualInput) {
-            activeAppId = appid;
-            if (appid) {
-                appidContainer.style.display = 'flex';
-                appidContainer.style.background = 'rgba(26, 159, 255, 0.05)';
-                appidContainer.style.border = '1px solid rgba(26, 159, 255, 0.15)';
-                
-                var labelText = isManualInput ? 'Manual Application ID' : 'Auto-Detected Application';
-                appidContainer.innerHTML = 
-                    '<div class="sls-game-label" style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: #66c0f4; margin-bottom: 8px; letter-spacing: 1px;">' + labelText + '</div>' +
-                    '<div class="sls-game-title" style="font-size: 32px; font-weight: 900; color: #fff; letter-spacing: -0.5px; text-shadow: 0 0 10px rgba(26, 159, 255, 0.3); word-break: break-word; transition: font-size 0.2s;">' + appid + '</div>';
-                
-                submitBtn.disabled = false;
-                submitBtn.style.cssText = 'width: 100%; background: linear-gradient(90deg, #1a9fff 0%, #0077d9 100%); border: none; border-radius: 8px; color: #fff; padding: 16px; font-size: 15px; font-weight: 700; cursor: pointer; box-shadow: 0 4px 15px rgba(26, 159, 255, 0.4); outline: none; transition: transform 0.2s, box-shadow 0.2s;';
-                status.innerText = '';
-                
-                fetchAppMetadata(appid);
-            } else {
-                activeAppMetadata = null;
-                appidContainer.style.display = 'flex';
-                appidContainer.style.background = 'rgba(255, 255, 255, 0.02)';
-                appidContainer.style.border = '1px dashed rgba(255, 255, 255, 0.1)';
-                appidContainer.innerHTML = 
-                   '<div style="color: #ff4d4d; margin-bottom: 8px;">' +
-                       '<svg style="width: 32px; height: 32px;" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">' +
-                           '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>' +
-                       '</svg>' +
-                   '</div>' +
-                   '<div style="font-size: 14px; color: #ff4d4d; font-weight: 600; margin-bottom: 12px;">Could not auto-detect AppID</div>' +
-                   '<div style="width: 100%; display: flex; flex-direction: column; align-items: center; gap: 8px;">' +
-                       '<label style="font-size: 11px; color: #8f98a0; font-weight: 600;">Enter AppID manually:</label>' +
-                       '<input type="text" id="sls-manual-appid-input" placeholder="e.g. 730" style="width: 160px; box-sizing: border-box; background: #0c0e12; border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 6px; color: #fff; padding: 8px 12px; font-size: 14px; font-family: monospace; text-align: center; outline: none;" />' +
-                       '<div id="sls-manual-game-preview" style="font-size: 12px; color: #66c0f4; font-weight: 600; min-height: 16px; margin-top: 4px;"></div>' +
-                   '</div>';
-
-                submitBtn.disabled = true;
-                submitBtn.style.cssText = 'width: 100%; background: rgba(255, 255, 255, 0.05); border: none; border-radius: 8px; color: rgba(255,255,255,0.3); padding: 16px; font-size: 15px; font-weight: 700; cursor: not-allowed; outline: none;';
-                
-                var inputEl = document.getElementById('sls-manual-appid-input');
-                var previewEl = document.getElementById('sls-manual-game-preview');
-                if (inputEl) {
-                    var inputDebounceTimer = null;
-                    inputEl.oninput = function () {
-                        var val = inputEl.value.trim();
-                        if (inputDebounceTimer) clearTimeout(inputDebounceTimer);
-                        
-                        if (/^[0-9]+$/.test(val)) {
-                            activeAppId = val;
-                            submitBtn.disabled = false;
-                            submitBtn.style.cssText = 'width: 100%; background: linear-gradient(90deg, #1a9fff 0%, #0077d9 100%); border: none; border-radius: 8px; color: #fff; padding: 16px; font-size: 15px; font-weight: 700; cursor: pointer; box-shadow: 0 4px 15px rgba(26, 159, 255, 0.4); outline: none; transition: transform 0.2s, box-shadow 0.2s;';
-                            
-                            previewEl.innerText = 'Searching game info...';
-                            inputDebounceTimer = setTimeout(function () {
-                                fetch('https://api.steamcmd.net/v1/info/' + val)
-                                    .then(function (r) { return r.json(); })
-                                    .then(function (data) {
-                                        var appData = data && data.data && data.data[val];
-                                        if (appData && activeAppId === val) {
-                                            activeAppMetadata = appData;
-                                            var name = appData.common && appData.common.name || val;
-                                            previewEl.innerText = 'Game: ' + name;
-                                            updateFileList();
-                                        } else if (activeAppId === val) {
-                                            previewEl.innerText = 'Unknown Game (AppID: ' + val + ')';
-                                        }
-                                    })
-                                    .catch(function () {
-                                        if (activeAppId === val) previewEl.innerText = 'AppID: ' + val;
-                                    });
-                            }, 500);
-                        } else {
-                            activeAppId = null;
-                            activeAppMetadata = null;
-                            submitBtn.disabled = true;
-                            submitBtn.style.cssText = 'width: 100%; background: rgba(255, 255, 255, 0.05); border: none; border-radius: 8px; color: rgba(255,255,255,0.3); padding: 16px; font-size: 15px; font-weight: 700; cursor: not-allowed; outline: none;';
-                            previewEl.innerText = '';
-                            updateFileList();
-                        }
-                    };
-                }
-            }
-        }
-
-        function detectAppIdFromFiles() {
-            if (selectedFiles.length === 0) {
-                setDetectedAppId(null);
-                return;
-            }
-
-            // 1. Look at file names containing ONLY numbers (excluding extension)
-            // E.g., "730.zip", "730.lua", "730.manifest"
-            for (var i = 0; i < selectedFiles.length; i++) {
-                var name = selectedFiles[i].name;
-                var dotIndex = name.lastIndexOf('.');
-                var baseName = dotIndex !== -1 ? name.substring(0, dotIndex) : name;
-                if (/^[0-9]+$/.test(baseName)) {
-                    setDetectedAppId(baseName);
-                    return;
-                }
-            }
-
-            // 2. Look for any .lua files to inspect
-            var luaFile = null;
-            for (var i = 0; i < selectedFiles.length; i++) {
-                if (selectedFiles[i].name.toLowerCase().endsWith('.lua')) {
-                    luaFile = selectedFiles[i];
-                    break;
-                }
-            }
-
-            if (luaFile) {
-                // Check if .lua file name has digits in it (e.g. "plugin_730.lua")
-                var match = luaFile.name.match(/([0-9]+)/);
-                if (match) {
-                    setDetectedAppId(match[1]);
-                    return;
-                }
-
-                // Scan inside the .lua file content!
-                status.style.color = '#8f98a0';
-                status.innerText = 'Scanning Lua file for AppID...';
-                var reader = new FileReader();
-                reader.onload = function (e) {
-                    var content = e.target.result;
-                    
-                    // Match appid = 730
-                    var m = content.match(/\b(?:appid|app_id|appId)\b\s*=\s*([0-9]+)/i);
-                    if (m) {
-                        setDetectedAppId(m[1]);
-                        return;
-                    }
-
-                    // Match comment: -- AppID: 730 or -- appid=730
-                    m = content.match(/--\s*(?:appid|app_id|appId|app)?\s*:?\s*\b([0-9]+)\b/i);
-                    if (m) {
-                        setDetectedAppId(m[1]);
-                        return;
-                    }
-
-                    // Look for addappid(3618391,0,"hex_key")
-                    m = content.match(/\b([0-9]{5,7})\b/);
-                    if (m) {
-                        setDetectedAppId(m[1]);
-                        return;
-                    }
-
-                    // No AppID found in Lua
-                    setDetectedAppId(null);
-                };
-                reader.onerror = function () {
-                    setDetectedAppId(null);
-                };
-                reader.readAsText(luaFile);
-            } else {
-                // If there's no .lua file, scan any file name for a numerical part
-                for (var i = 0; i < selectedFiles.length; i++) {
-                    var match = selectedFiles[i].name.match(/([0-9]+)/);
-                    if (match) {
-                        setDetectedAppId(match[1]);
-                        return;
-                    }
-                }
-                setDetectedAppId(null);
-            }
+            // Update the submit button state after rendering
+            updateSubmitButton();
         }
 
         submitBtn.onclick = function (e) {
             e.preventDefault(); e.stopPropagation();
 
-            var appid = activeAppId;
+            var appid = detectAppIdFromCheckedFiles();
             if (!appid) {
                 status.style.color = '#ff4d4d';
-                status.innerText = 'Error: No valid game AppID detected.';
+                status.innerText = 'Error: Could not detect AppID from files. Ensure a .lua file with addappid() is included.';
                 return;
             }
 
-            if (selectedFiles.length === 0) {
+            var filesToInstall = selectedFiles.filter(function (f) { return checkedFiles[f.name] !== false; });
+            if (filesToInstall.length === 0) {
                 status.style.color = '#ff4d4d';
-                status.innerText = 'Error: Please select at least one file or folder to install.';
+                status.innerText = 'Error: Please select at least one file to import.';
                 return;
             }
 
             submitBtn.innerText = 'Processing...';
             submitBtn.disabled = true;
+            submitBtn.style.background = 'rgba(255, 255, 255, 0.05)';
+            submitBtn.style.color = 'rgba(255,255,255,0.3)';
+            submitBtn.style.cursor = 'not-allowed';
             status.style.color = '#8f98a0';
             status.innerText = 'Reading files...';
 
-            var filesToInstall = selectedFiles.filter(function (f) { return checkedFiles[f.name] !== false; });
             var promises = filesToInstall.map(function (file) {
                 return new Promise(function (resolve, reject) {
                     var reader = new FileReader();
@@ -1204,25 +1062,50 @@
                 })
                 .then(function (r) { return r.json(); })
                 .then(function (res) {
-                    submitBtn.innerText = 'Install Assets';
-                    submitBtn.disabled = false;
+                    submitBtn.innerText = 'Import';
 
                     if (res.success) {
                         status.style.color = '#4caf50';
-                        status.innerText = 'Success: Assets successfully installed! Please restart the game if running.';
+                        status.innerText = 'Success: ' + (res.message || 'Files installed successfully!');
+
+                        // Find all distinct AppIDs from the checked lua files to trigger installations
+                        var appidsToInstall = [];
+                        selectedFiles.forEach(function (f) {
+                            if (checkedFiles[f.name] !== false && f.name.toLowerCase().endsWith('.lua')) {
+                                var content = luaContentsCache[f.name];
+                                var id = getAppIdFromLuaContent(content) || getAppIdFromFileName(f.name);
+                                if (id && appidsToInstall.indexOf(id) === -1) {
+                                    appidsToInstall.push(id);
+                                }
+                            }
+                        });
+
+                        // Fallback to the main appid if no custom ones are found in selected lua files
+                        if (appidsToInstall.length === 0 && appid) {
+                            appidsToInstall.push(appid);
+                        }
+
                         selectedFiles = [];
+                        checkedFiles = {};
                         updateFileList();
-                        setDetectedAppId(null);
+
+                        // Trigger the installation window in Steam for each AppID
+                        appidsToInstall.forEach(function (id, idx) {
+                            setTimeout(function () {
+                                window.location.href = 'steam://install/' + id;
+                            }, idx * 500);
+                        });
                     } else {
                         status.style.color = '#ff4d4d';
-                        status.innerText = 'Installation failed: ' + res.message;
+                        status.innerText = 'Failed: ' + (res.message || 'Unknown error');
+                        updateSubmitButton();
                     }
                 })
                 .catch(function (err) {
-                    submitBtn.innerText = 'Install Assets';
-                    submitBtn.disabled = false;
+                    submitBtn.innerText = 'Import';
                     status.style.color = '#ff4d4d';
-                    status.innerText = 'Error connection to backend: ' + err.message;
+                    status.innerText = 'Error connecting to backend: ' + err.message;
+                    updateSubmitButton();
                 });
         };
     }

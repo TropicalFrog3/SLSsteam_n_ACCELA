@@ -14,6 +14,8 @@ cd "$SLS_DIR"
 make
 
 echo "Updating prod-release for SLSsteam..."
+mkdir -p "$PROD_SLS_DIR/bin"
+mkdir -p "$PROD_SLS_DIR/res"
 cp "$SLS_DIR/bin/SLSsteam.so" "$PROD_SLS_DIR/bin/"
 cp "$SLS_DIR/bin/library-inject.so" "$PROD_SLS_DIR/bin/"
 cp "$SLS_DIR/res/updates.yaml" "$PROD_SLS_DIR/res/"
@@ -21,6 +23,7 @@ cp "$SLS_DIR/res/config.yaml" "$PROD_SLS_DIR/res/"
 cp "$SLS_DIR/res/version.txt" "$PROD_SLS_DIR/res/"
 
 echo "Updating prod-release for ACCELA..."
+mkdir -p "$PROD_ACCELA_DIR/bin"
 cp "$ACCELA_DIR/ACCELAINSTALL" "$PROD_ACCELA_DIR/"
 cp "$ACCELA_DIR/bin/accela.png" "$PROD_ACCELA_DIR/bin/"
 cp "$ACCELA_DIR/bin/requirements.txt" "$PROD_ACCELA_DIR/bin/"
