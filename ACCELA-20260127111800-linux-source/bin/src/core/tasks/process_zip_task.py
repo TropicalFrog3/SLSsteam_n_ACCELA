@@ -28,24 +28,32 @@ class ProcessZipTask:
             if not all_app_matches:
                 raise ValueError("LUA file is invalid; no 'addappid' entries found.")
 
-            first_app_match = all_app_matches.pop(0)
-            first_app_args = first_app_match.group(1).strip()
-            game_data["appid"] = first_app_args.split(",")[0].strip()
+            if not game_data.get("appid"):
+                first_app_match = all_app_matches.pop(0)
+                first_app_args = first_app_match.group(1).strip()
+                game_data["appid"] = first_app_args.split(",")[0].strip()
 
-            comment_part = first_app_match.group(2)
-            game_name_match = re.search(r"--\s*(.*)", comment_part)
-            game_data["game_name"] = (
-                game_name_match.group(1).strip()
-                if game_name_match
-                else None
-            )
+                comment_part = first_app_match.group(2)
+                game_name_match = re.search(r"--\s*(.*)", comment_part)
+                game_data["game_name"] = (
+                    game_name_match.group(1).strip()
+                    if game_name_match
+                    else None
+                )
 
-            game_data["depots"] = {}
-            game_data["dlcs"] = {}
+            game_data.setdefault("depots", {})
+            game_data.setdefault("dlcs", {})
             for match in all_app_matches:
                 args_str = match.group(1).strip()
                 args = [arg.strip() for arg in args_str.split(",")]
                 app_id = args[0]
+
+                if app_id == game_data.get("appid"):
+                    comment_part = match.group(2)
+                    game_name_match = re.search(r"--\s*(.*)", comment_part)
+                    if game_name_match and not game_data.get("game_name"):
+                        game_data["game_name"] = game_name_match.group(1).strip()
+                    continue
 
                 comment_part = match.group(2)
                 desc_match = re.search(r"--\s*(.*)", comment_part)
@@ -155,6 +163,12 @@ class ProcessZipTask:
                 lua_files = [f for f in zip_ref.namelist() if f.endswith(".lua")]
                 if not lua_files:
                     raise FileNotFoundError("No .lua file found in the zip archive.")
+
+                lua_basename = os.path.basename(lua_files[0])
+                if lua_basename.endswith(".lua"):
+                    potential_appid = lua_basename[:-4]
+                    if potential_appid.isdigit():
+                        game_data["appid"] = potential_appid
 
                 manifest_files = {
                     os.path.basename(f): zip_ref.read(f)

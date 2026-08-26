@@ -1,14 +1,15 @@
 #include "config.hpp"
+#include "config_default.hpp"
 
 #include "config_default.hpp"
 #include "feats/depotkeys.hpp"
 #include "filewatcher.hpp"
 #include "log.hpp"
+#include "utils.hpp"
+
 #include "yaml-cpp/yaml.h"
 
-#include <cmath>
 #include <cstdint>
-#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -20,26 +21,31 @@
 #include <vector>
 
 
-std::string CConfig::getDir()
+std::string CConfig::getDir() const
 {
-	char pathBuf[255];
+	std::ostringstream path;
+
 	const char* configDir = getenv("XDG_CONFIG_HOME"); //Most users should have this set iirc
-	if (configDir != NULL)
+	if (configDir)
 	{
-		sprintf(pathBuf, "%s/SLSsteam", configDir);
+		path << configDir;
 	}
 	else
 	{
+		LOG_CUSTOM(k_ELogLevelWarn | k_ELogLevelOnce, "XDG_CONFIG_HOME not set! Falling back to HOME\n");
+
 		const char* home = getenv("HOME");
-		sprintf(pathBuf, "%s/.config/SLSsteam", home);
+		path << home << "/.config";
 	}
 
-	return std::string(pathBuf);
+	path << "/SLSsteam";
+
+	return path.str();
 }
 
-std::string CConfig::getPath()
+std::string CConfig::getPath() const
 {
-	return getDir().append("/config.yaml");
+	return getDir() + "/config.yaml";
 }
 
 std::string CConfig::getPluginDir()
@@ -62,33 +68,32 @@ std::string CConfig::getPluginDir()
 	return "";
 }
 
-bool CConfig::createFile()
+bool CConfig::createFile() const
 {
-	std::string path = getPath();
+	const std::string path = getPath();
 	if (!std::filesystem::exists(path))
 	{
-		std::string dir = getDir();
+		const std::string dir = getDir();
 		if (!std::filesystem::exists(dir))
 		{
 			if (!std::filesystem::create_directory(dir))
 			{
-				g_pLog->info("Unable to create config directory at %s!\n", dir.c_str());
+				LOG_NOTIFY("Unable to create config directory at %s!\n", dir.c_str());
 				return false;
 			}
 
-			g_pLog->debug("Created config directory at %s\n", dir.c_str());
+			LOG_DEBUG("Created config directory at %s\n", dir.c_str());
 		}
 
-		FILE* file = fopen(path.c_str(), "w");
-		if (!file)
+		auto config = std::ofstream(path);
+		if (!config.is_open())
 		{
-			g_pLog->info("Unable to create config at %s!\n", path.c_str());
+			LOG_NOTIFY("Unable to create %s!", path.c_str());
 			return false;
 		}
 
-		fputs(defaultConfig, file);
-		fflush(file);
-		fclose(file);
+		config << defaultConfig;
+		config.close();
 	}
 
 	return true;
@@ -103,12 +108,13 @@ static void onFileChange(const char* filename)
 		{
 			return;
 		}
-		g_pLog->debug("onFileChange triggered by %s\n", filename);
+		LOG_DEBUG("onFileChange triggered by %s\n", filename);
 	}
 
 	g_config.loadSettings();
 	scanLuaPluginsAndUpdateConfig();
 	DepotKeys::scanLuaPluginsForDepotKeys();
+	LOG_NOTIFY("Config reloaded!");
 }
 
 bool CConfig::init()
@@ -144,18 +150,38 @@ CConfig::~CConfig()
 	}
 }
 
-
-void CConfig::setError(ELoadError err)
+void CConfig::setError(const ELoadError err, const char* keyName)
 {
-	if (__loadErrors.get() > err)
+	const auto prev = __loadErrors.get();
+	std::ostringstream msg;
+
+	if (!prev.size())
 	{
-		return;
+		msg << "Config loading issues encountered:\n";
+	}
+	else
+	{
+		msg << prev << "\n";
 	}
 
-	__loadErrors = err;
+	switch(err)
+	{
+		case ELoadError::MissingKey:
+			msg << "Missing " << keyName;
+			break;
+	
+		case ELoadError::ParsingException:
+			msg << "Failed to parse " << keyName;
+			break;
+
+		default:
+			break;
+	}
+
+	__loadErrors = msg.str();
 }
 
-bool CConfig::loadSettings()
+bool CConfig::loadSettings(bool firstLoad)
 {
 	YAML::Node node;
 	try
@@ -164,58 +190,98 @@ bool CConfig::loadSettings()
 	}
 	catch (YAML::BadFile& bf)
 	{
-		g_pLog->info("Can not read config.yaml! %s\nUsing defaults", bf.msg.c_str());
+		LOG_NOTIFYLONG("Can not read config.yaml! %s\nUsing defaults", bf.msg.c_str());
 		node = YAML::Node(); //Create empty node and let defaults kick in
 	}
 	catch (YAML::ParserException& pe)
 	{
-		g_pLog->info("Error parsing config.yaml! %s\nUsing defaults", pe.msg.c_str());
+		LOG_NOTIFYLONG("Error parsing config.yaml! %s\nUsing defaults", pe.msg.c_str());
 		node = YAML::Node(); //Create empty node and let defaults kick in
 	}
 
-	__loadErrors = ELoadError::None;
+	__loadErrors = std::string("");
 	
+	//Parse logLevels first, otherwise settings won't get logged
+	logLevels = getSetting<uint32_t>(node, "LogLevels", 0xff, true);
+	api = getSetting<bool>(node, "API", true);
+	if (api.get())
+	{
+		logLevels = logLevels.get() | k_ELogLevelAPI;
+	}
+
+	//This is shitty, but to do it properly have to do something even shittier
+	LOG_CUSTOM
+	(
+		k_ELogLevelInfo | k_ELogLevelOnce,
+		"LogLevels is \"%s\"\n",
+
+		ELogLevel_ToString(logLevels.get()).c_str()
+	);
+
 	disableFamilyLock = getSetting<bool>(node, "DisableFamilyShareLock", true);
 	useWhiteList = getSetting<bool>(node, "UseWhitelist", false);
-	automaticFilter = getSetting<bool>(node, "AutoFilterList", true);
-	playNotOwnedGames = getSetting<bool>(node, "PlayNotOwnedGames", false);
+	maxSchemaTries = getSetting<uint32_t>(node, "MaxSchemaTries", 10);
 	safeMode = getSetting<bool>(node, "SafeMode", false);
-	notifications = getSetting<bool>(node, "Notifications", true);
 	warnHashMissmatch = getSetting<bool>(node, "WarnHashMissmatch", false);
 	notifyInit = getSetting<bool>(node, "NotifyInit", true);
-	api = getSetting<bool>(node, "API", true);
+	fakeName = getSetting<std::string>(node, "FakeName", "");
 	fakeEmail = getSetting<std::string>(node, "FakeEmail", "");
 	fakeWalletBalance = getSetting<int32_t>(node, "FakeWalletBalance", 0);
+	disableCloud = getSetting<bool>(node, "DisableCloud", true);
+	disableUpdates = getSetting<bool>(node, "DisableUpdates", true);
+	dumpInterfaceMaps = getSetting<bool>(node, "DumpClientInterfaces", false);
 	extendedLogging = getSetting<bool>(node, "ExtendedLogging", false);
-	logLevel = getSetting<unsigned int>(node, "LogLevel", 2);
-
+	
 	morrenusKey = getSetting<std::string>(node, "MorrenusKey", "");
 	ryuuKey = getSetting<std::string>(node, "RyuuKey", "");
 
+	const std::lock_guard appsChanged(appsChangedMutex);
+	const auto prevAppIds = addedAppIds.get();
+	const auto _addedAppIds = getList<AppId_t>(node, "AdditionalApps");
 
-	//TODO: Create smart logging function to log them automatically via getSetting
-	g_pLog->info("DisableFamilyShareLock: %i\n", disableFamilyLock.get());
-	g_pLog->info("UseWhitelist: %i\n", useWhiteList.get());
-	g_pLog->info("AutoFilterList: %i\n", automaticFilter.get());
-	g_pLog->info("PlayNotOwnedGames: %i\n", playNotOwnedGames.get());
-	g_pLog->info("SafeMode: %i\n", safeMode.get());
-	g_pLog->info("Notifications: %i\n", notifications.get());
-	g_pLog->info("WarnHashMissmatch: %i\n", warnHashMissmatch.get());
-	g_pLog->info("NotifyInit: %i\n", notifyInit.get());
-	g_pLog->info("API: %i\n", api.get());
-	g_pLog->info("FakeEmail: %s\n", fakeEmail.get().c_str());
-	g_pLog->info("FakeWalletBalance: %i\n", fakeWalletBalance.get());
-	g_pLog->info("ExtendedLogging: %i\n", extendedLogging.get());
-	g_pLog->info("LogLevel: %i\n", logLevel.get());
+	if (!firstLoad)
+	{
+		for (const auto& appId : prevAppIds)
+		{
+			if (_addedAppIds.contains(appId))
+			{
+				continue;
+			}
 
-	appIds = getList<uint32_t>(node, "AppIds");
-	addedAppIds = getList<uint32_t>(node, "AdditionalApps");
-	fakeOffline = getList<uint32_t>(node, "FakeOffline");
+			removedApps.emplace(appId);
+			LOG_DEBUG("AppId %u removed from AdditionalApps\n", appId);
+		}
+		for (const auto& appId : _addedAppIds)
+		{
+			if (prevAppIds.contains(appId))
+			{
+				continue;
+			}
 
-	fakeAppIds = getMap<uint32_t, uint32_t>(node, "FakeAppIds");
-	appTokens = getMap<uint32_t, uint64_t>(node, "AppTokens");
-	gameTitles = getMap<uint32_t, std::string>(node, "GameTitles");
-	subscriptionTimestamps = getMap<uint32_t, uint32_t>(node, "SubscriptionTimestamps");
+			newApps.emplace(appId);
+			LOG_DEBUG("AppId %u added to AdditionalApps\n", appId);
+		}
+	}
+
+	addedAppIds = _addedAppIds;
+
+	appIds = getList<AppId_t>(node, "AppIds");
+	fakeOffline = getList<AppId_t>(node, "FakeOffline");
+	depotBlacklist = getList<AppId_t>(node, "DepotBlacklist");
+
+	fakeAppIds = getMap<AppId_t, AppId_t>(node, "FakeAppIds");
+	manifestIds = getMap<AppId_t, uint64_t>(node, "ManifestIds");
+	appTokens = getMap<AppId_t, uint64_t>(node, "AppTokens");
+	cdKeys = getMap<AppId_t, std::string>(node, "CDKeys", true);
+	gameTitles = getMap<AppId_t, std::string>(node, "GameTitles");
+	subscriptionTimestamps = getMap<AppId_t, uint32_t>(node, "SubscriptionTimestamps");
+	steamIdOverride = getMap<AppId_t, uint64_t>(node, "SteamIdOverride");
+
+	//Do not log the keys themself
+	for (const auto& key : cdKeys.get())
+	{
+		LOG_CUSTOM(k_ELogLevelInfo | k_ELogLevelOnce, "Added CDKey for %u\n", key.first);
+	}
 
 	//Do not warn for these (yet?)
 	const auto idleStatusNode = node["IdleStatus"];
@@ -223,8 +289,8 @@ bool CConfig::loadSettings()
 	{
 		try
 		{
-			auto appId = idleStatusNode["AppId"].as<uint32_t>();
-			auto title = idleStatusNode["Title"].as<std::string>();
+			const auto appId = idleStatusNode["AppId"].as<AppId_t>();
+			const auto title = idleStatusNode["Title"].as<std::string>();
 
 			idleStatus = FakeGame_t
 			{
@@ -232,12 +298,12 @@ bool CConfig::loadSettings()
 				title
 			};
 
-			g_pLog->info("Idle status %s with AppId %u\n", title.c_str(), appId);
+			LOG_CUSTOM(k_ELogLevelInfo | k_ELogLevelOnce, "Idle status %s with AppId %u\n", title.c_str(), appId);
 		}
 		catch(...)
 		{
-			//g_pLog->warn("Failed to parse IdleStatus!");A
-			setError(ELoadError::ParsingException);
+			//LOG_NOTIFYWARN("Failed to parse IdleStatus!");A
+			setError(ELoadError::ParsingException, "IdleStatus");
 		}
 	}
 	const auto unownedStatusNode = node["UnownedStatus"];
@@ -254,46 +320,37 @@ bool CConfig::loadSettings()
 				title
 			};
 
-			g_pLog->info("Unowned status %s with AppId %u\n", title.c_str(), appId);
+			LOG_INFO("Unowned status %s with AppId %u\n", title.c_str(), appId);
 		}
 		catch(...)
 		{
-			//g_pLog->warn("Failed to parse UnownedStatus");
-			setError(ELoadError::ParsingException);
+			//LOG_WARN("Failed to parse UnownedStatus");
+			setError(ELoadError::ParsingException, "UnownedStatus");
 		}
 	}
 
+
 	const auto dlcDataNode = node["DlcData"];
-	if(dlcDataNode)
+	if (dlcDataNode)
 	{
 		auto _dlcData = dlcData.empty();
 
-		for(auto& app : dlcDataNode)
+		for (auto& app : dlcDataNode)
 		{
 			try
 			{
-				const uint32_t parentId = app.first.as<uint32_t>();
+				const AppId_t parentId = app.first.as<AppId_t>();
+				LOG_CUSTOM(k_ELogLevelInfo | k_ELogLevelOnce, "Parsing DlcData for %u\n", parentId);
+				const auto dlcIds = getMap<AppId_t, std::string>(dlcDataNode, std::to_string(parentId).c_str());
 
-				CDlcData data;
+				CDlcData& data = _dlcData[parentId];
 				data.parentId = parentId;
-				g_pLog->info("Adding DlcData for %u\n", parentId);
-
-				for(auto& dlc : app.second)
-				{
-					const uint32_t dlcId = dlc.first.as<uint32_t>();
-					//There's more efficient types to store strings, but they mostly do not work
-					const std::string dlcName = dlc.second.as<std::string>();
-
-					data.dlcIds[dlcId] = dlcName;
-					g_pLog->info("DlcId %u -> %s\n", dlcId, dlcName.c_str());
-				}
-
-				_dlcData[parentId] = data;
+				data.dlcIds = dlcIds;
 			}
 			catch(...)
 			{
-				//g_pLog->info("Failed to parse DlcData!");
-				setError(ELoadError::ParsingException);
+				//LOG_NOTIFY("Failed to parse DlcData!");
+				setError(ELoadError::ParsingException, "DlcData");
 				break;
 			}
 		}
@@ -302,8 +359,8 @@ bool CConfig::loadSettings()
 	}
 	else
 	{
-		//g_pLog->info("Missing DlcData entry in config!");
-		setError(ELoadError::MissingKey);
+		//LOG_NOTIFY("Missing DlcData entry in config!");
+		setError(ELoadError::MissingKey, "DlcData");
 	}
 
 	const auto denuvoGamesNode = node["DenuvoGames"];
@@ -315,22 +372,22 @@ bool CConfig::loadSettings()
 		{
 			try
 			{
-				const uint32_t steamId = steamIdNode.first.as<uint32_t>();
-				_denuvoGames[steamId] = std::unordered_set<uint32_t>();
+				const uint64_t steamId = steamIdNode.first.as<uint64_t>();
+				_denuvoGames[steamId] = std::unordered_set<AppId_t>();
 
 				for (auto& appIdNode : steamIdNode.second)
 				{
-					const uint32_t appId = appIdNode.as<uint32_t>();
+					const AppId_t appId = appIdNode.as<AppId_t>();
 					_denuvoGames[steamId].emplace(appId);
 
 					//Again, not loggin SteamId because of privacy
-					g_pLog->info("Added DenuvoGame %u\n", appId);
+					LOG_CUSTOM(k_ELogLevelInfo | k_ELogLevelOnce, "Added DenuvoGame %u\n", appId);
 				}
 			}
 			catch (...)
 			{
-				//g_pLog->info("Failed to parse DenuvoGames!");
-				setError(ELoadError::ParsingException);
+				//LOG_NOTIFY("Failed to parse DenuvoGames!");
+				setError(ELoadError::ParsingException, "DenuvoGames");
 			}
 		}
 
@@ -338,63 +395,90 @@ bool CConfig::loadSettings()
 	}
 	else
 	{
-		//g_pLog->info("Missing DenuvoGames entry in config!");
-		setError(ELoadError::MissingKey);
+		//LOG_NOTIFY("Missing DenuvoGames entry in config!");
+		setError(ELoadError::MissingKey, "DenuvoGames");
 	}
 
-	switch(__loadErrors.get())
+	const auto errors = __loadErrors.get();
+	if (errors.size())
 	{
-		case ELoadError::MissingKey:
-			g_pLog->info("Issues during config loading encountered! Missing key(s)");
-			break;
-		case ELoadError::ParsingException:
-			g_pLog->info("Issues during config loading encountered! Parsing error(s)");
-			break;
+		//We know this isn't build by user input, so disabling the warning is fine for this line
+		#pragma GCC diagnostic push
+		#pragma GCC diagnostic ignored "-Wformat-security"
 
-		default:
-			break;
+		LOG_NOTIFYWARN(errors.c_str());
+
+		#pragma GCC diagnostic pop
 	}
-
 
 	return true;
 }
 
-bool CConfig::isAddedAppId(uint32_t appId)
+bool CConfig::isAddedAppId(const AppId_t appId)
 {
 	return addedAppIds.get().contains(appId);
 }
 
-bool CConfig::shouldExcludeAppId(uint32_t appId)
+bool CConfig::shouldExcludeAppId(const AppId_t appId, const bool ignoreAdditionalApps)
 {
 	bool exclude = false;
 	//Proper way would be with getAppType, but that seems broken so we need to do this instead
-	constexpr uint32_t ONE_BILLION = 1E9; //Implicit cast from double to unsigned int, hopefully this does not break anything
+	constexpr AppId_t ONE_BILLION = 1E9; //Implicit cast from double to unsigned int, hopefully this does not break anything
 	if (appId >= ONE_BILLION) //Higher and equal to 10^9 gets used by Steam Internally
 	{
 		exclude = true;
 	}
 	else
 	{
-		bool found = appIds.get().contains(appId);
-		exclude = !isAddedAppId(appId) && ((useWhiteList.get() && !found) || (!useWhiteList.get() && found));
-	}
+		const bool whitelist = useWhiteList.get();
+		const bool found = appIds.get().contains(appId);
+		exclude = (!isAddedAppId(appId) || ignoreAdditionalApps) && ((whitelist && !found) || (!whitelist && found));
 
-	g_pLog->once("shouldExcludeAppId(%u) -> %i\n", appId, exclude);
-	return exclude;
-}
-
-uint32_t CConfig::getDenuvoGameOwner(uint32_t appId)
-{
-	for(const auto& tpl : denuvoGames.get())
-	{
-		if (tpl.second.contains(appId))
+		if (!ignoreAdditionalApps)
 		{
-			//g_pLog->once("%u is DenuvoGame\n", appId);
-			return tpl.first;
+			const auto usr = g_pSteamEngine->getUser();
+			const auto appInfo = usr->getClientApps();
+
+			//Might be worth to check for APPTYPE_DLC, but knowing Valve & individual gamedevs
+			//surely not every DLC will be tagged as such
+			char chParent[16] { };
+			const int len = usr ? appInfo->getAppData(appId, "parent", chParent, sizeof(chParent)) : 0;
+			//Do not blindly trust len, nor the str included. Some devs just like to mess with Valve or something (for example appId 221300)
+			if (len > 0 && Utils::isNumber(chParent))
+			{
+				//LOG_DEBUG("AppId %i, parent %s (%i)\n", appId, chParent, len);
+				AppId_t parentId = std::stoul(chParent);
+
+				if (whitelist && !shouldExcludeAppId(parentId, true))
+				{
+					//LOG_DEBUG("Override exclude %i with false, because parent %u isn't excluded\n", exclude, parentId);
+					exclude = false;
+				}
+				else if (!whitelist && shouldExcludeAppId(parentId, true))
+				{
+					//LOG_DEBUG("Override exclude %i with true, because parent %u is excluded\n", exclude, parentId);
+					exclude = true;
+				}
+			}
 		}
 	}
 
-	return 0;
+	LOG_ONCE("shouldExcludeAppId(%u) -> %i\n", appId, exclude);
+	return exclude;
+}
+
+CSteamId CConfig::getDenuvoGameOwner(const AppId_t appId)
+{
+	for (const auto& tpl : denuvoGames.get())
+	{
+		if (tpl.second.contains(appId))
+		{
+			//LOG_ONCE("%u is DenuvoGame\n", appId);
+			return CSteamId(tpl.first);
+		}
+	}
+
+	return CSteamId();
 }
 
 bool CConfig::addAdditionalAppId(uint32_t appId)
@@ -405,7 +489,7 @@ bool CConfig::addAdditionalAppId(uint32_t appId)
 	std::ifstream inFile(configPath);
 	if (!inFile.is_open())
 	{
-		g_pLog->info("addAdditionalAppId: Cannot open config at %s\n", configPath.c_str());
+		LOG_INFO("addAdditionalAppId: Cannot open config at %s\n", configPath.c_str());
 		return false;
 	}
 
@@ -454,7 +538,7 @@ bool CConfig::addAdditionalAppId(uint32_t appId)
 					{
 						if (static_cast<uint32_t>(std::stoul(val)) == appId)
 						{
-							g_pLog->info("addAdditionalAppId: AppID %u already in AdditionalApps\n", appId);
+							LOG_INFO("addAdditionalAppId: AppID %u already in AdditionalApps\n", appId);
 							return true;
 						}
 					}
@@ -502,7 +586,7 @@ bool CConfig::addAdditionalAppId(uint32_t appId)
 
 	if (sectionHeaderIdx == -1)
 	{
-		g_pLog->info("addAdditionalAppId: AdditionalApps section not found in %s\n", configPath.c_str());
+		LOG_INFO("addAdditionalAppId: AdditionalApps section not found in %s\n", configPath.c_str());
 		return false;
 	}
 
@@ -516,7 +600,7 @@ bool CConfig::addAdditionalAppId(uint32_t appId)
 	std::ofstream outFile(tmpPath);
 	if (!outFile.is_open())
 	{
-		g_pLog->info("addAdditionalAppId: Cannot write temp file at %s\n", tmpPath.c_str());
+		LOG_INFO("addAdditionalAppId: Cannot write temp file at %s\n", tmpPath.c_str());
 		return false;
 	}
 
@@ -530,12 +614,12 @@ bool CConfig::addAdditionalAppId(uint32_t appId)
 
 	if (std::rename(tmpPath.c_str(), configPath.c_str()) != 0)
 	{
-		g_pLog->info("addAdditionalAppId: Failed to rename temp file to %s\n", configPath.c_str());
+		LOG_INFO("addAdditionalAppId: Failed to rename temp file to %s\n", configPath.c_str());
 		std::remove(tmpPath.c_str());
 		return false;
 	}
 
-	g_pLog->info("addAdditionalAppId: Appended AppID %u to AdditionalApps in %s\n", appId, configPath.c_str());
+	LOG_INFO("addAdditionalAppId: Appended AppID %u to AdditionalApps in %s\n", appId, configPath.c_str());
 	
 	// Update memory set immediately for hooks
 	auto current = addedAppIds.get();
@@ -553,7 +637,7 @@ bool CConfig::removeAdditionalAppId(uint32_t appId)
 	std::ifstream inFile(configPath);
 	if (!inFile.is_open())
 	{
-		g_pLog->info("removeAdditionalAppId: Cannot open config at %s\n", configPath.c_str());
+		LOG_INFO("removeAdditionalAppId: Cannot open config at %s\n", configPath.c_str());
 		return false;
 	}
 
@@ -608,7 +692,7 @@ bool CConfig::removeAdditionalAppId(uint32_t appId)
 					{
 						if (static_cast<uint32_t>(std::stoul(val)) == appId)
 						{
-							g_pLog->info("removeAdditionalAppId: Found AppID %u, removing line\n", appId);
+							LOG_INFO("removeAdditionalAppId: Found AppID %u, removing line\n", appId);
 							removed = true;
 							continue; // Skip this line
 						}
@@ -622,7 +706,7 @@ bool CConfig::removeAdditionalAppId(uint32_t appId)
 
 	if (!removed)
 	{
-		g_pLog->info("removeAdditionalAppId: AppID %u not found in AdditionalApps\n", appId);
+		LOG_INFO("removeAdditionalAppId: AppID %u not found in AdditionalApps\n", appId);
 		return false;
 	}
 
@@ -631,7 +715,7 @@ bool CConfig::removeAdditionalAppId(uint32_t appId)
 	std::ofstream outFile(tmpPath);
 	if (!outFile.is_open())
 	{
-		g_pLog->info("removeAdditionalAppId: Cannot write temp file at %s\n", tmpPath.c_str());
+		LOG_INFO("removeAdditionalAppId: Cannot write temp file at %s\n", tmpPath.c_str());
 		return false;
 	}
 
@@ -645,19 +729,19 @@ bool CConfig::removeAdditionalAppId(uint32_t appId)
 
 	if (std::rename(tmpPath.c_str(), configPath.c_str()) != 0)
 	{
-		g_pLog->info("removeAdditionalAppId: Failed to rename temp file to %s\n", configPath.c_str());
+		LOG_INFO("removeAdditionalAppId: Failed to rename temp file to %s\n", configPath.c_str());
 		std::remove(tmpPath.c_str());
 		return false;
 	}
 
-	g_pLog->info("removeAdditionalAppId: Removed AppID %u from AdditionalApps in %s\n", appId, configPath.c_str());
+	LOG_INFO("removeAdditionalAppId: Removed AppID %u from AdditionalApps in %s\n", appId, configPath.c_str());
 
 	// Update memory set immediately for hooks
 	auto current = addedAppIds.get();
 	if (current.erase(appId) > 0)
 	{
 		addedAppIds = current;
-		g_pLog->info("removeAdditionalAppId: Updated memory set for AppID %u\n", appId);
+		LOG_INFO("removeAdditionalAppId: Updated memory set for AppID %u\n", appId);
 	}
 
 	return true;
@@ -719,7 +803,7 @@ bool CConfig::updateApiAuth(const std::string& newMorrenus, const std::string& n
 		return false;
 	}
 
-	g_pLog->info("updateApiAuth: Updated API credentials in %s\n", configPath.c_str());
+	LOG_INFO("updateApiAuth: Updated API credentials in %s\n", configPath.c_str());
 	return true;
 }
 
@@ -730,12 +814,9 @@ void scanLuaPluginsAndUpdateConfig()
 
 	if (pluginDir.empty())
 	{
-		g_pLog->warn("scanLuaPluginsAndUpdateConfig: Cannot locate SteamRoot or plugin directory\n");
+		LOG_WARN("scanLuaPluginsAndUpdateConfig: Cannot locate SteamRoot or plugin directory\n");
 		return;
 	}
-
-	// Regex to extract AppID from first addappid(<digits>) call
-	const std::regex appIdRegex(R"(addappid\((\d+))");
 
 	// 3. Collect AppIDs from all *.lua files
 	std::unordered_set<uint32_t> collectedAppIds;
@@ -752,7 +833,7 @@ void scanLuaPluginsAndUpdateConfig()
 			std::ifstream file(path);
 			if (!file.is_open())
 			{
-				g_pLog->warn("scanLuaPluginsAndUpdateConfig: Cannot open Lua plugin: %s\n", path.c_str());
+				LOG_WARN("scanLuaPluginsAndUpdateConfig: Cannot open Lua plugin: %s\n", path.c_str());
 				continue;
 			}
 
@@ -760,23 +841,41 @@ void scanLuaPluginsAndUpdateConfig()
 								 std::istreambuf_iterator<char>());
 			file.close();
 
-			// 4. Extract AppID from first addappid(\d+) match
-			std::smatch match;
-			if (!std::regex_search(content, match, appIdRegex))
+			// 4. Extract all AppIDs from addappid(\d+) matches
+			size_t pos = 0;
+			bool foundAny = false;
+			
+			while ((pos = content.find("addappid(", pos)) != std::string::npos)
 			{
-				g_pLog->warn("Malformed Lua plugin: %s\n", path.c_str());
+				pos += 9; // length of "addappid("
+				size_t endPos = pos;
+				while (endPos < content.length() && std::isdigit(content[endPos]))
+				{
+					endPos++;
+				}
+				
+				if (endPos > pos)
+				{
+					foundAny = true;
+					try
+					{
+						std::string appIdStr = content.substr(pos, endPos - pos);
+						const uint32_t appId = static_cast<uint32_t>(std::stoul(appIdStr));
+						collectedAppIds.emplace(appId);
+						LOG_DEBUG("scanLuaPluginsAndUpdateConfig: Found AppID %u in %s\n", appId, path.c_str());
+					}
+					catch (...)
+					{
+						LOG_WARN("Malformed AppID in Lua plugin: %s\n", path.c_str());
+					}
+				}
+				pos = endPos;
+			}
+			
+			if (!foundAny)
+			{
+				LOG_WARN("Malformed Lua plugin: %s\n", path.c_str());
 				continue;
-			}
-
-			try
-			{
-				const uint32_t appId = static_cast<uint32_t>(std::stoul(match[1].str()));
-				collectedAppIds.emplace(appId);
-				g_pLog->debug("scanLuaPluginsAndUpdateConfig: Found AppID %u in %s\n", appId, path.c_str());
-			}
-			catch (...)
-			{
-				g_pLog->warn("Malformed Lua plugin: %s\n", path.c_str());
 			}
 		}
 		else if (path.extension() == ".manifest")
@@ -790,7 +889,7 @@ void scanLuaPluginsAndUpdateConfig()
 			{
 				const uint32_t appId = static_cast<uint32_t>(std::stoul(appIdStr));
 				collectedAppIds.emplace(appId);
-				g_pLog->debug("scanLuaPluginsAndUpdateConfig: Found AppID %u from manifest %s\n", appId, path.c_str());
+				LOG_DEBUG("scanLuaPluginsAndUpdateConfig: Found AppID %u from manifest %s\n", appId, path.c_str());
 			}
 			catch (...)
 			{
@@ -804,12 +903,12 @@ void scanLuaPluginsAndUpdateConfig()
 	{
 		if (!g_config.isAddedAppId(appId))
 		{
-			g_pLog->info("scanLuaPluginsAndUpdateConfig: Adding AppID %u to AdditionalApps\n", appId);
+			LOG_INFO("scanLuaPluginsAndUpdateConfig: Adding AppID %u to AdditionalApps\n", appId);
 			g_config.addAdditionalAppId(appId);
 		}
 		else
 		{
-			g_pLog->debug("scanLuaPluginsAndUpdateConfig: AppID %u already in AdditionalApps, skipping\n", appId);
+			LOG_DEBUG("scanLuaPluginsAndUpdateConfig: AppID %u already in AdditionalApps, skipping\n", appId);
 		}
 	}
 
@@ -828,11 +927,11 @@ void scanLuaPluginsAndUpdateConfig()
 
 	for (uint32_t appId : toRemove)
 	{
-		g_pLog->info("scanLuaPluginsAndUpdateConfig: Removing stale AppID %u from AdditionalApps\n", appId);
+		LOG_INFO("scanLuaPluginsAndUpdateConfig: Removing stale AppID %u from AdditionalApps\n", appId);
 		g_config.removeAdditionalAppId(appId);
 	}
 
-	g_pLog->info("scanLuaPluginsAndUpdateConfig: Scan complete, processed %zu Lua plugin(s)\n", collectedAppIds.size());
+	LOG_INFO("scanLuaPluginsAndUpdateConfig: Scan complete, processed %zu Lua plugin(s)\n", collectedAppIds.size());
 }
 
 CConfig g_config = CConfig();
