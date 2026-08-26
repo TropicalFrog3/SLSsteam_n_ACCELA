@@ -1,6 +1,6 @@
 Version: beta-v1.1.0
 Changelog: |
-  This release updates AceSLS-SLSsteam to 20260820085507 and focuses on stability and compatibility improvements.
+  This release is an update from AceSLS-SLSsteam 20260820085507 and focuses on stability and compatibility improvements.
 
   Highlights:
   - Fixed a Steam crash caused by config.yaml parsing exceptions.
