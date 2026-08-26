@@ -1,6 +1,8 @@
 #pragma once
 
+#include <filesystem>
 #include <pthread.h>
+#include <sys/inotify.h>
 #include <unordered_map>
 #include <string>
 #include <cstdint>
@@ -12,6 +14,8 @@ class CFileWatcher
 	pthread_t watchThread;
 
 public:
+	constexpr static int WATCH_MASK = IN_CLOSE_WRITE | IN_MOVED_TO;
+
 	int notifyFd;
 	std::unordered_map<int, std::string> fileFdMap;
 

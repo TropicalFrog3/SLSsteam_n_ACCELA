@@ -473,7 +473,7 @@ namespace StoreInject
 
     static void automationWorker()
     {
-        g_pLog->info("StoreInject: Automation worker started\n");
+        LOG_INFO("StoreInject: Automation worker started\n");
         
         std::string lastProcessedTimestamp = "";
         int checkCounter = 0;
@@ -526,7 +526,7 @@ namespace StoreInject
                                 if (timestamp != lastProcessedTimestamp)
                                 {
                                     lastProcessedTimestamp = timestamp;
-                                    g_pLog->info("Remove Lua clicked for Product ID: %s\n", productId.c_str());
+                                    LOG_INFO("Remove Lua clicked for Product ID: %s\n", productId.c_str());
 
                                     // Trigger removal in background thread
                                     std::string pid = productId;
@@ -544,7 +544,7 @@ namespace StoreInject
                                                 auto luaPath = std::filesystem::path(pluginDir) / (pid + ".lua");
                                                 if (std::filesystem::exists(luaPath)) {
                                                     std::filesystem::remove(luaPath);
-                                                    g_pLog->info("RemoveLua: Deleted lua file %s\n", luaPath.c_str());
+                                                    LOG_INFO("RemoveLua: Deleted lua file %s\n", luaPath.c_str());
                                                 }
                                                 
                                                 // Remove manifests from pluginDir
@@ -557,7 +557,7 @@ namespace StoreInject
                                                             std::string appIdStr = (underscorePos != std::string::npos) ? stem.substr(0, underscorePos) : stem;
                                                             if (appIdStr == pid) {
                                                                 std::filesystem::remove(path);
-                                                                g_pLog->info("RemoveLua: Deleted manifest %s from pluginDir\n", path.c_str());
+                                                                LOG_INFO("RemoveLua: Deleted manifest %s from pluginDir\n", path.c_str());
                                                             }
                                                         }
                                                     }
@@ -576,7 +576,7 @@ namespace StoreInject
                                                                 std::string appIdStr = (underscorePos != std::string::npos) ? stem.substr(0, underscorePos) : stem;
                                                                 if (appIdStr == pid) {
                                                                     std::filesystem::remove(path);
-                                                                    g_pLog->info("RemoveLua: Deleted manifest %s from depotcache\n", path.c_str());
+                                                                    LOG_INFO("RemoveLua: Deleted manifest %s from depotcache\n", path.c_str());
                                                                 }
                                                             }
                                                         }
@@ -587,9 +587,9 @@ namespace StoreInject
                                             // 3. Update Config
                                             g_config.removeAdditionalAppId(appId);
                                             
-                                            g_pLog->info("RemoveLua: Completed for appid=%s\n", pid.c_str());
+                                            LOG_INFO("RemoveLua: Completed for appid=%s\n", pid.c_str());
                                         } catch (const std::exception& e) {
-                                            g_pLog->warn("RemoveLua: Error processing appid %s: %s\n", pid.c_str(), e.what());
+                                            LOG_WARN("RemoveLua: Error processing appid %s: %s\n", pid.c_str(), e.what());
                                         }
                                     }).detach();
                                 }
@@ -615,7 +615,7 @@ namespace StoreInject
                                 if (timestamp != lastProcessedTimestamp)
                                 {
                                     lastProcessedTimestamp = timestamp;
-                                    g_pLog->info("Download Lua clicked for Product ID: %s\n", productId.c_str());
+                                    LOG_INFO("Download Lua clicked for Product ID: %s\n", productId.c_str());
 
                                     // Trigger download in background thread
                                     std::string pid = productId; // copy for lambda capture
@@ -623,7 +623,7 @@ namespace StoreInject
                                         bool ok = LuaDownload::downloadAndInstall(pid);
                                         if (ok)
                                         {
-                                            g_pLog->info("LuaDownload: Completed for appid=%s\n", pid.c_str());
+                                            LOG_INFO("LuaDownload: Completed for appid=%s\n", pid.c_str());
 
                                             // Ensure the game shows in library even if the user
                                             // navigated away from the store page (which would
@@ -634,11 +634,11 @@ namespace StoreInject
                                                 // Apps::setInstalled(appId);
                                                 // scanLuaPluginsAndUpdateConfig();
                                             } catch (...) {
-                                                g_pLog->warn("LuaDownload: Failed to register appid=%s in library\n", pid.c_str());
+                                                LOG_WARN("LuaDownload: Failed to register appid=%s in library\n", pid.c_str());
                                             }
                                         }
                                         else
-                                            g_pLog->info("LuaDownload: Failed for appid=%s\n", pid.c_str());
+                                            LOG_INFO("LuaDownload: Failed for appid=%s\n", pid.c_str());
                                     }).detach();
                                 }
                             }
@@ -665,7 +665,7 @@ namespace StoreInject
                                 if (timestamp != lastProcessedTimestamp)
                                 {
                                     lastProcessedTimestamp = timestamp;
-                                    g_pLog->info("API Settings received via CDP UI! Updating config...\n");
+                                    LOG_INFO("API Settings received via CDP UI! Updating config...\n");
                                     if (!morr.empty()) g_config.morrenusKey = morr;
                                     if (!ryuu.empty()) g_config.ryuuKey = ryuu;
                                     g_config.updateApiAuth(g_config.morrenusKey.get(), g_config.ryuuKey.get());
@@ -715,7 +715,7 @@ namespace StoreInject
             return;
         }
 
-        g_pLog->info("StoreInject: Callback server listening on port 9001\n");
+        LOG_INFO("StoreInject: Callback server listening on port 9001\n");
 
         while (!g_shouldStop)
         {
@@ -751,14 +751,14 @@ namespace StoreInject
                         else if (request.find("/manual-install") != std::string::npos)
                         {
                             try {
-                                g_pLog->info("StoreInject: Received /manual-install request\n");
+                                LOG_INFO("StoreInject: Received /manual-install request\n");
                                 std::string respBody = handleManualInstall(request);
                                 std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: " + std::to_string(respBody.size()) + "\r\n\r\n" + respBody;
                                 send(new_socket, response.c_str(), response.size(), 0);
                                 close(new_socket);
                                 handled = true;
                             } catch (const std::exception& e) {
-                                g_pLog->warn("StoreInject: Exception during manual-install: %s\n", e.what());
+                                LOG_WARN("StoreInject: Exception during manual-install: %s\n", e.what());
                                 std::string respBody = "{\"success\":false,\"message\":\"Internal server error: " + std::string(e.what()) + "\"}";
                                 std::string response = "HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: " + std::to_string(respBody.size()) + "\r\n\r\n" + respBody;
                                 send(new_socket, response.c_str(), response.size(), 0);
@@ -781,7 +781,7 @@ namespace StoreInject
                                     size_t endPos = request.find_first_of(" &", idPos);
                                     std::string idStr = request.substr(idPos + 3, (endPos == std::string::npos) ? std::string::npos : (endPos - (idPos + 3)));
                                     uint32_t appId = std::stoul(idStr);
-                                    g_pLog->info("StoreInject: Received /check for AppID %u\n", appId);
+                                    LOG_INFO("StoreInject: Received /check for AppID %u\n", appId);
                                     
                                     bool gameExists = Apps::gameFilesExist(appId);
                                     bool luaExists = false;
@@ -823,7 +823,7 @@ namespace StoreInject
                                     size_t endPos = request.find_first_of(" &", idPos);
                                     std::string idStr = request.substr(idPos + 3, (endPos == std::string::npos) ? std::string::npos : (endPos - (idPos + 3)));
                                     uint32_t appId = std::stoul(idStr);
-                                    g_pLog->info("StoreInject: Received /verify-files for AppID %u\n", appId);
+                                    LOG_INFO("StoreInject: Received /verify-files for AppID %u\n", appId);
                                     
                                     const char* home = getenv("HOME");
                                     if (home) {
@@ -851,9 +851,9 @@ namespace StoreInject
                                             execl("/bin/bash", "bash", "-c", cmd.c_str(), nullptr);
                                             _exit(1);
                                         } else if (pid > 0) {
-                                            g_pLog->info("StoreInject: Started verify-files terminal child with PID %d\n", pid);
+                                            LOG_INFO("StoreInject: Started verify-files terminal child with PID %d\n", pid);
                                         } else {
-                                            g_pLog->warn("StoreInject: fork() failed for verify-files: %s\n", strerror(errno));
+                                            LOG_WARN("StoreInject: fork() failed for verify-files: %s\n", strerror(errno));
                                         }
                                     }
                                     
@@ -876,7 +876,7 @@ namespace StoreInject
                                     size_t endPos = request.find_first_of(" &", idPos);
                                     std::string idStr = request.substr(idPos + 3, (endPos == std::string::npos) ? std::string::npos : (endPos - (idPos + 3)));
                                     uint32_t appId = std::stoul(idStr);
-                                    g_pLog->info("StoreInject: Received /install-fix for AppID %u\n", appId);
+                                    LOG_INFO("StoreInject: Received /install-fix for AppID %u\n", appId);
                                     
                                     Apps::setOnlineFixInstalled(appId, true);
                                     
@@ -899,7 +899,7 @@ namespace StoreInject
                                     size_t endPos = request.find_first_of(" &", idPos);
                                     std::string idStr = request.substr(idPos + 3, (endPos == std::string::npos) ? std::string::npos : (endPos - (idPos + 3)));
                                     uint32_t appId = std::stoul(idStr);
-                                    g_pLog->info("StoreInject: Received /remove-fix for AppID %u\n", appId);
+                                    LOG_INFO("StoreInject: Received /remove-fix for AppID %u\n", appId);
                                     
                                     Apps::setOnlineFixInstalled(appId, false);
                                     
@@ -922,7 +922,7 @@ namespace StoreInject
                                     size_t endPos = request.find_first_of(" &", idPos);
                                     std::string idStr = request.substr(idPos + 3, (endPos == std::string::npos) ? std::string::npos : (endPos - (idPos + 3)));
                                     uint32_t appId = std::stoul(idStr);
-                                    g_pLog->info("StoreInject: Received /install-crack for AppID %u\n", appId);
+                                    LOG_INFO("StoreInject: Received /install-crack for AppID %u\n", appId);
                                     
                                     Apps::setAutoCrackInstalled(appId, true);
                                     
@@ -945,7 +945,7 @@ namespace StoreInject
                                     size_t endPos = request.find_first_of(" &", idPos);
                                     std::string idStr = request.substr(idPos + 3, (endPos == std::string::npos) ? std::string::npos : (endPos - (idPos + 3)));
                                     uint32_t appId = std::stoul(idStr);
-                                    g_pLog->info("StoreInject: Received /remove-crack for AppID %u\n", appId);
+                                    LOG_INFO("StoreInject: Received /remove-crack for AppID %u\n", appId);
                                     
                                     Apps::setAutoCrackInstalled(appId, false);
                                     
@@ -968,7 +968,7 @@ namespace StoreInject
                                     size_t endPos = request.find_first_of(" &", idPos);
                                     std::string idStr = request.substr(idPos + 3, (endPos == std::string::npos) ? std::string::npos : (endPos - (idPos + 3)));
                                     uint32_t appId = std::stoul(idStr);
-                                    g_pLog->info("StoreInject: Received /fix-install for AppID %u\n", appId);
+                                    LOG_INFO("StoreInject: Received /fix-install for AppID %u\n", appId);
                                     
                                     Apps::removeInstalled(appId);
                                     
@@ -1001,7 +1001,7 @@ namespace StoreInject
                                 // Remove Lua and Manifest files
                                 std::string pluginDir = g_config.getPluginDir();
                                 if (!pluginDir.empty()) {
-                                    g_pLog->info("RemoveLua: Scanning %s for AppID %u\n", pluginDir.c_str(), appId);
+                                    LOG_INFO("RemoveLua: Scanning %s for AppID %u\n", pluginDir.c_str(), appId);
                                     
                                     // 1. Smart Lua Deletion: Scan file contents for addappid(ID)
                                     try {
@@ -1016,12 +1016,12 @@ namespace StoreInject
                                                     std::string pattern = "addappid(" + idStr + ")";
                                                     if (content.find("addappid") != std::string::npos && content.find(idStr) != std::string::npos) {
                                                         std::filesystem::remove(entry.path());
-                                                        g_pLog->info("RemoveLua: Deleted lua plugin %s (contained AppID %u)\n", entry.path().c_str(), appId);
+                                                        LOG_INFO("RemoveLua: Deleted lua plugin %s (contained AppID %u)\n", entry.path().c_str(), appId);
                                                     }
                                                 }
                                             }
                                         }
-                                    } catch(const std::exception& e) { g_pLog->warn("RemoveLua: Error scanning plugins: %s\n", e.what()); }
+                                    } catch(const std::exception& e) { LOG_WARN("RemoveLua: Error scanning plugins: %s\n", e.what()); }
                                     
                                     // 2. Remove manifests from pluginDir
                                     try {
@@ -1030,7 +1030,7 @@ namespace StoreInject
                                                 std::string stem = entry.path().stem().string();
                                                 if (stem.find(idStr) == 0) {
                                                     std::filesystem::remove(entry.path());
-                                                    g_pLog->info("RemoveLua: Deleted manifest %s from pluginDir\n", entry.path().c_str());
+                                                    LOG_INFO("RemoveLua: Deleted manifest %s from pluginDir\n", entry.path().c_str());
                                                 }
                                             }
                                         }
@@ -1046,7 +1046,7 @@ namespace StoreInject
                                                     std::string stem = entry.path().stem().string();
                                                     if (stem.find(idStr) == 0) {
                                                         std::filesystem::remove(entry.path());
-                                                        g_pLog->info("RemoveLua: Deleted manifest %s from depotcache\n", entry.path().c_str());
+                                                        LOG_INFO("RemoveLua: Deleted manifest %s from depotcache\n", entry.path().c_str());
                                                     }
                                                 }
                                             }
@@ -1063,7 +1063,7 @@ namespace StoreInject
                                 g_config.removeAdditionalAppId(appId);
                                 
                                 // if (g_pClientApps) {
-                                //     g_pLog->info("Triggering RequestAppInfoUpdate for %u\n", appId);
+                                //     LOG_INFO("Triggering RequestAppInfoUpdate for %u\n", appId);
                                 //     typedef void (*RequestAppInfoUpdate_t)(void*, uint32_t*, uint32_t, bool);
                                 //     void** vtable = *reinterpret_cast<void***>(g_pClientApps);
                                 //     RequestAppInfoUpdate_t requestUpdateFn = reinterpret_cast<RequestAppInfoUpdate_t>(vtable[7]);
@@ -1079,7 +1079,7 @@ namespace StoreInject
                         }
                         else if (request.find("/restart") != std::string::npos)
                         {
-                            g_pLog->info("Restart Steam requested via UI\n");
+                            LOG_INFO("Restart Steam requested via UI\n");
                             
                             // Send response first
                             const char* response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n";
@@ -1138,7 +1138,7 @@ namespace StoreInject
                             script += " " + steamBin
                                    + " </dev/null >/dev/null 2>&1 &";
                             
-                            g_pLog->info("Restart script: %s\n", script.c_str());
+                            LOG_INFO("Restart script: %s\n", script.c_str());
                             
                             // Use fork()+exec() to fully detach the restart process.
                             // system() blocks and the script kills our parent, causing issues.
@@ -1157,9 +1157,9 @@ namespace StoreInject
                                 execl("/bin/bash", "bash", "-c", script.c_str(), nullptr);
                                 _exit(1);  // Only reached if execl fails
                             } else if (pid > 0) {
-                                g_pLog->info("Restart child spawned with PID %d\n", pid);
+                                LOG_INFO("Restart child spawned with PID %d\n", pid);
                             } else {
-                                g_pLog->warn("fork() failed for restart: %s\n", strerror(errno));
+                                LOG_WARN("fork() failed for restart: %s\n", strerror(errno));
                             }
                         }
                         else if (request.find("/log?msg=") != std::string::npos)
@@ -1171,7 +1171,7 @@ namespace StoreInject
                                 std::string msg = request.substr(msgPos + 4, endPos - (msgPos + 4));
                                 // Simple URL decode
                                 std::replace(msg.begin(), msg.end(), '+', ' ');
-                                g_pLog->info("StoreInject JS: %s\n", msg.c_str());
+                                LOG_INFO("StoreInject JS: %s\n", msg.c_str());
                             }
                         }
                         else if (request.find("id=") != std::string::npos)
@@ -1181,7 +1181,7 @@ namespace StoreInject
                             if (endPos != std::string::npos)
                             {
                                 std::string idStr = request.substr(idPos + 3, endPos - (idPos + 3));
-                                g_pLog->info("Download Lua clicked for Product ID: %s\n", idStr.c_str());
+                                LOG_INFO("Download Lua clicked for Product ID: %s\n", idStr.c_str());
                             }
                         }
                     }
@@ -1245,7 +1245,7 @@ namespace StoreInject
         if (outFile.is_open())
         {
             outFile << content;
-            g_pLog->info("StoreInject: Removed injected script from index.html\n");
+            LOG_INFO("StoreInject: Removed injected script from index.html\n");
         }
     }
 

@@ -11,113 +11,73 @@
 struct Pattern_t
 {
 public:
-  const std::string name;
-  const std::string pattern;
-  const MemHlp::SigFollowMode followMode;
-  std::vector<uint8_t> prologue;
+	const std::string name;
+	const std::string pattern;
+	const MemHlp::SigFollowMode followMode;
+	std::vector<int16_t> prologue;
 
-  lm_address_t address;
+	lm_address_t address;
 	lm_module_t* module;
 
 	Pattern_t(const char* name, const char* pattern, MemHlp::SigFollowMode followMode, lm_module_t* module = nullptr);
-	Pattern_t(const char* name, const char* pattern, MemHlp::SigFollowMode followMode, std::vector<uint8_t> prologue, lm_module_t* module = nullptr);
-  //~CPattern();
+	Pattern_t(const char* name, const char* pattern, MemHlp::SigFollowMode followMode, std::vector<int16_t> prologue, lm_module_t* module = nullptr);
+	//~CPattern();
 
-  bool find();
+	bool find();
 };
 
 namespace Patterns
 {
-extern Pattern_t FamilyGroupRunningApp;
-extern Pattern_t StopPlayingBorrowedApp;
-
-extern Pattern_t TraceIPC;
+	extern Pattern_t TraceIPC;
 
 	namespace CAPIJob
 	{
-		extern Pattern_t GetPlayerStats;
+		extern Pattern_t SendAndRecv;
 	}
 
-	namespace CProtoBufMsgBase
+	namespace CAppDataCache
 	{
-extern Pattern_t InitFromPacket;
-extern Pattern_t Send;
-	};
+		extern Pattern_t BParseResponseMessage;
+	}
 
 	namespace CSteamEngine
 	{
-extern Pattern_t Init;
-extern Pattern_t SetAppIdForCurrentPipe;
-
-extern Pattern_t Offset_User;
+		extern Pattern_t GetServerPipe;
+		extern Pattern_t SetAppIdForCurrentPipe;
+		extern Pattern_t ProcessIPCFrame;
+		extern Pattern_t Offset_ClientUtils;
+		extern Pattern_t Offset_User;
 	}
 
-	namespace CSteamMatchmakingServers
+	namespace CWebSocketConnection
 	{
-extern Pattern_t GetServerDetails;
-extern Pattern_t RequestInternetServerList;
+		extern Pattern_t BBuildAndAsyncSendFrame;
 	}
 
 	namespace CUser
 	{
 		//TODO: Order & Convert old patterns
-extern Pattern_t CheckAppOwnership;
-extern Pattern_t GetSubscribedApps;
-extern Pattern_t PostCallback;
-extern Pattern_t UpdateAppOwnershipTicket;
+		extern Pattern_t CheckAppOwnership;
+		extern Pattern_t GetSubscribedApps;
+		extern Pattern_t PostCallback;
+		extern Pattern_t PostCallbackToAppId;
+		extern Pattern_t UpdateAppOwnershipTicket;
+		extern Pattern_t m_OffsetClientUser;
+		extern Pattern_t m_OffsetUserAppInfo;
+		extern Pattern_t m_OffsetUserAppManager;
 	}
 
-	namespace IClientAppManager
+	namespace CUserAppManager
 	{
-extern Pattern_t RunIPCFrame;
-extern Pattern_t BCanRemotePlayTogether;
+		extern Pattern_t BuildDepotDependency;
 	}
-
-	namespace IClientApps
-	{
-extern Pattern_t RunIPCFrame;
-}
-
-	namespace IClientRemoteStorage
-	{
-extern Pattern_t RunIPCFrame;
-}
-
-	namespace IClientUser
-	{
-extern Pattern_t RunIPCFrame;
-
-extern Pattern_t BLoggedOn;
-extern Pattern_t BUpdateAppOwnershipTicket;
-extern Pattern_t GetAppOwnershipTicketExtendedData;
-extern Pattern_t GetSteamId;
-extern Pattern_t IsUserSubscribedAppInTicket;
-extern Pattern_t RequiresLegacyCDKey;
-	}
-
-	namespace IClientUGC
-	{
-extern Pattern_t RunIPCFrame;
-}
-
-	namespace IClientUserStats
-	{
-extern Pattern_t RunIPCFrame;
-}
 
 	namespace IClientUtils
 	{
-extern Pattern_t RunIPCFrame;
-extern Pattern_t Offset_GetPipeIndex;
+		extern Pattern_t Offset_GetPipeIndex;
 	}
 
 
-	//steamui.so
-	namespace ISteamMatchmakingPingResponse
-	{
-extern Pattern_t ServerResponded;
-}
-
 	extern std::vector<Pattern_t*> patterns;
-bool init();
+	bool init();
 }

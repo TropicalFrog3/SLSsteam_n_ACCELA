@@ -3,27 +3,29 @@
   lib,
   rev,
   callPackage,
-}: let
+}:
+let
   sls-steam = callPackage ./default.nix {
     inherit rev;
   };
 in
-  pkgs.stdenv.mkDerivation {
-    pname = "SLSsteam-wrapper";
-    version = rev;
+pkgs.stdenv.mkDerivation {
+  pname = "SLSsteam-wrapper";
+  version = rev;
 
-    src = sls-steam;
+  src = sls-steam;
 
-    nativeBuildInputs = [pkgs.makeWrapper];
+  nativeBuildInputs = [ pkgs.makeWrapper ];
 
-    installPhase = ''
-      mkdir -p $out/bin
-      makeWrapper ${pkgs.steam}/bin/steam $out/bin/SLSsteam \
-        --set LD_AUDIT "${sls-steam}/library-inject.so:${sls-steam}/SLSsteam.so"
-    '';
+  installPhase = ''
+    mkdir -p $out/bin
+    makeWrapper ${pkgs.steam}/bin/steam $out/bin/SLSsteam \
+      --set LD_AUDIT "${sls-steam}/library-inject.so:${sls-steam}/SLSsteam.so"
+  '';
 
-    meta = {
-      description = "Steamclient Modification for Linux";
-      platforms = lib.platforms.linux;
-    };
-  }
+  meta = {
+    description = "Steamclient Modification for Linux";
+    platforms = lib.platforms.linux;
+    mainProgram = "SLSsteam";
+  };
+}

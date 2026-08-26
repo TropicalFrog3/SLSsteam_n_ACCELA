@@ -1,13 +1,11 @@
-Version: beta-v1.0.2
+Version: beta-v1.1.0
 Changelog: |
-  This release includes major improvements
+  This release updates AceSLS-SLSsteam to 20260820085507 and focuses on stability and compatibility improvements.
 
-  ### Fixes & Improvements
-  - **JS Injection**: Modularized JavaScript injection by moving scripts to external files with a robust resource loader.
-  - **Performance**: Optimized injection frequency and removed unnecessary success modal UI components.
+  Highlights:
+  - Fixed a Steam crash caused by config.yaml parsing exceptions.
+  - Corrected LUA appid handling so game IDs resolve more reliably.
+  - Fixed ACCELA AppID resolution logic.
+  - Improved the update flow so Steam can restart safely while binaries are replaced.
 
-  ### New Features
-  - **Auto-Update**: Added auto-update capability at launch with interactive Zenity prompts.
-  - **DepotKeys**: Added DepotKeys module to inject decryption keys and ownership tickets directly from Lua plugins.
-  - **Install Endpoint**: Implemented manual file installation endpoint.
 DownloadUrl: https://github.com/TropicalFrog3/SLSsteam_n_ACCELA/releases/download/${version}/SLSsteam-n-ACCELA.zip

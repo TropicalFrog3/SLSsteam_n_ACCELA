@@ -2,7 +2,11 @@
 
 #include "log.hpp"
 
+#include <cstring>
+#include <filesystem>
+#include <linux/limits.h>
 #include <sys/inotify.h>
+#include <sys/types.h>
 #include <unistd.h>
 #include <errno.h>
 
@@ -11,11 +15,11 @@
 void* watchLoop(void* args)
 {
 	auto watcher = reinterpret_cast<CFileWatcher*>(args);
-	g_pLog->debug("Started FileWatcher %u\n", watcher->notifyFd);
+	LOG_DEBUG("Started FileWatcher %u\n", watcher->notifyFd);
 
 	for(;;)
 	{
-		g_pLog->debug("Watching for changes...\n");
+		LOG_DEBUG("Watching for changes...\n");
 
 		char buffer[4096] __attribute__ ((aligned(__alignof__(struct inotify_event))));
 		ssize_t len = read(watcher->notifyFd, buffer, sizeof(buffer));
@@ -25,7 +29,7 @@ void* watchLoop(void* args)
 			if (len == -1 && errno == EINTR)
 				continue;
 			
-			g_pLog->debug("inotify read error or closed: %d\n", errno);
+			LOG_DEBUG("inotify read error or closed: %d\n", errno);
 			break;
 		}
 
@@ -36,7 +40,7 @@ void* watchLoop(void* args)
 			
 			if (watcher->fileFdMap.contains(event->wd))
 			{
-				g_pLog->debug("inotify %u(%s) -> %u (name: %s)\n", 
+				LOG_DEBUG("inotify %u(%s) -> %u (name: %s)\n", 
 					event->wd, 
 					watcher->fileFdMap[event->wd].c_str(), 
 					event->mask,
@@ -50,12 +54,12 @@ void* watchLoop(void* args)
 	return nullptr;
 }
 
-CFileWatcher::CFileWatcher(FileModifyEvent_t onModify)
+CFileWatcher::CFileWatcher(const FileModifyEvent_t onModify)
 {
 	this->onModify = onModify;
 
 	notifyFd = inotify_init();
-	g_pLog->debug("Created notify fd %i\n", notifyFd);
+	LOG_DEBUG("Created notify fd %i\n", notifyFd);
 }
 
 CFileWatcher::~CFileWatcher()
@@ -69,7 +73,7 @@ CFileWatcher::~CFileWatcher()
 	{
 		close(notifyFd);
 
-		for(const auto& fd : fileFdMap)
+		for (const auto& fd : fileFdMap)
 		{
 			if (fd.first == -1)
 			{
@@ -90,7 +94,7 @@ bool CFileWatcher::addWatch(const char* path, uint32_t mask)
 	}
 
 	fileFdMap[fd] = path;
-	g_pLog->debug("Added %s (mask %u) to FileWatcher %i\n", path, mask, notifyFd);
+	LOG_DEBUG("Added %s (mask %u) to FileWatcher %i\n", path, mask, notifyFd);
 	return fd != -1;
 }
 

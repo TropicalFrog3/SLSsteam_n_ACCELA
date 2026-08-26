@@ -100,8 +100,8 @@ namespace Tier0Hook
             return orig(cmd, a2, a3);
         }
 
-        g_pLog->info("Tier0Hook: Intercepted steamwebhelper launch\n");
-        g_pLog->debug("Tier0Hook: Original cmd: %s\n", cmd);
+        LOG_INFO("Tier0Hook: Intercepted steamwebhelper launch\n");
+        LOG_DEBUG("Tier0Hook: Original cmd: %s\n", cmd);
 
         // Parse the command and inject our flags
         ParsedCmd parsed = parseCommand(cmd);
@@ -118,7 +118,7 @@ namespace Tier0Hook
 
         // Build the modified command
         std::string newCmd = parsed.build();
-        g_pLog->info("Tier0Hook: Modified cmd: %s\n", newCmd.c_str());
+        LOG_INFO("Tier0Hook: Modified cmd: %s\n", newCmd.c_str());
 
         // Call original with modified command
         // Use thread_local to keep the string alive for the duration of the call
@@ -139,21 +139,21 @@ namespace Tier0Hook
         // loaded by the auditee (Steam). LM_FindModule bypasses this.
         lm_module_t tier0Mod{};
         if (!LM_FindModule("libtier0_s.so", &tier0Mod)) {
-            g_pLog->warn("Tier0Hook: libtier0_s.so not found in /proc/self/maps\n");
+            LOG_WARN("Tier0Hook: libtier0_s.so not found in /proc/self/maps\n");
             return false;
         }
 
-        g_pLog->info("Tier0Hook: Found libtier0_s.so at %p (size=%zu, path=%s)\n",
+        LOG_INFO("Tier0Hook: Found libtier0_s.so at %p (size=%zu, path=%s)\n",
                      reinterpret_cast<void*>(tier0Mod.base), tier0Mod.size, tier0Mod.path);
 
         // Look up the CreateSimpleProcess symbol from the module's ELF symbol table
         g_createSimpleProcessAddr = LM_FindSymbolAddress(&tier0Mod, "CreateSimpleProcess");
         if (g_createSimpleProcessAddr == LM_ADDRESS_BAD) {
-            g_pLog->warn("Tier0Hook: CreateSimpleProcess symbol not found in libtier0_s.so\n");
+            LOG_WARN("Tier0Hook: CreateSimpleProcess symbol not found in libtier0_s.so\n");
             return false;
         }
 
-        g_pLog->info("Tier0Hook: Found CreateSimpleProcess at %p\n",
+        LOG_INFO("Tier0Hook: Found CreateSimpleProcess at %p\n",
                      reinterpret_cast<void*>(g_createSimpleProcessAddr));
 
         // Install the detour using libmem (same pattern as other hooks in the project)
@@ -164,7 +164,7 @@ namespace Tier0Hook
         );
 
         if (g_hookSize == 0 || g_trampoline == LM_ADDRESS_BAD) {
-            g_pLog->warn("Tier0Hook: LM_HookCode failed for CreateSimpleProcess\n");
+            LOG_WARN("Tier0Hook: LM_HookCode failed for CreateSimpleProcess\n");
             return false;
         }
 
@@ -176,7 +176,7 @@ namespace Tier0Hook
         MemHlp::fixPICThunkCall("CreateSimpleProcess", g_createSimpleProcessAddr, g_trampoline);
 
         g_hookInstalled = true;
-        g_pLog->info("Tier0Hook: CreateSimpleProcess hooked successfully (size=%zu)\n", g_hookSize);
+        LOG_INFO("Tier0Hook: CreateSimpleProcess hooked successfully (size=%zu)\n", g_hookSize);
         return true;
     }
 
@@ -186,7 +186,7 @@ namespace Tier0Hook
 
         if (g_createSimpleProcessAddr != LM_ADDRESS_BAD && g_hookSize > 0) {
             LM_UnhookCode(g_createSimpleProcessAddr, g_trampoline, g_hookSize);
-            g_pLog->info("Tier0Hook: CreateSimpleProcess hook removed\n");
+            LOG_INFO("Tier0Hook: CreateSimpleProcess hook removed\n");
         }
 
         g_hookInstalled = false;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "sdk/sdk.hpp"
+
 #include "mtvar.hpp"
 #include "log.hpp"
 
@@ -8,9 +10,10 @@
 #include "yaml-cpp/yaml.h"
 
 #include <cstdint>
-#include <cstdio>
+#include <mutex>
 #include <pthread.h>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -21,15 +24,15 @@ class CConfig {
 public:
 	struct FakeGame_t
 	{
-		uint32_t appId = 0;
+		AppId_t appId = 0;
 		std::string title;
 	};
 
 	class CDlcData
 	{
 	public:
-		uint32_t parentId;
-		std::unordered_map<uint32_t, std::string> dlcIds;
+		AppId_t parentId;
+		std::unordered_map<AppId_t, std::string> dlcIds;
 		//No default constructor, otherwise dlcData will complain that no matching one was found
 		//without implementing it ourself anyway
 	};
@@ -40,33 +43,39 @@ public:
 		MissingKey,
 		ParsingException
 	};
-	MTVariable<ELoadError> __loadErrors;
+	MTVariable<std::string> __loadErrors;
 
-	MTVariable<std::unordered_set<uint32_t>> appIds;
-	MTVariable<std::unordered_set<uint32_t>> addedAppIds;
-	MTVariable<std::unordered_map<uint32_t, CDlcData>> dlcData;
-	MTVariable<std::unordered_map<uint32_t, uint64_t>> appTokens;
-	MTVariable<std::unordered_set<uint32_t>> fakeOffline;
-	MTVariable<std::unordered_map<uint32_t, uint32_t>> fakeAppIds;
+	MTVariable<std::unordered_set<AppId_t>> appIds;
+	MTVariable<std::unordered_set<AppId_t>> addedAppIds;
+	MTVariable<std::unordered_map<AppId_t, CDlcData>> dlcData;
+	MTVariable<std::unordered_map<AppId_t, uint64_t>> appTokens;
+	MTVariable<std::unordered_map<AppId_t, std::string>> cdKeys;
+	MTVariable<std::unordered_set<AppId_t>> fakeOffline;
+	MTVariable<std::unordered_map<AppId_t, AppId_t>> fakeAppIds;
+	MTVariable<std::unordered_map<AppId_t, uint64_t>> manifestIds;
+	MTVariable<std::unordered_set<AppId_t>> depotBlacklist;
 	MTVariable<FakeGame_t> idleStatus;
 	MTVariable<FakeGame_t> unownedStatus;
-	MTVariable<std::unordered_map<uint32_t, std::string>> gameTitles;
-	MTVariable<std::unordered_map<uint32_t, uint32_t>> subscriptionTimestamps;
+	MTVariable<std::unordered_map<AppId_t, std::string>> gameTitles;
+	MTVariable<std::unordered_map<AppId_t, uint32_t>> subscriptionTimestamps;
 
-	MTVariable<std::unordered_map<uint32_t, std::unordered_set<uint32_t>>> denuvoGames;
+	MTVariable<std::unordered_map<uint64_t, std::unordered_set<AppId_t>>> denuvoGames;
+	MTVariable<std::unordered_map<AppId_t, uint64_t>> steamIdOverride;
 
 	MTVariable<bool> disableFamilyLock;
 	MTVariable<bool> useWhiteList;
-	MTVariable<bool> automaticFilter;
-	MTVariable<bool> playNotOwnedGames;
+	MTVariable<uint32_t> maxSchemaTries;
 	MTVariable<bool> safeMode;
-	MTVariable<bool> notifications;
 	MTVariable<bool> warnHashMissmatch;
 	MTVariable<bool> notifyInit;
 	MTVariable<bool> api;
+	MTVariable<bool> disableCloud;
+	MTVariable<bool> disableUpdates;
+	MTVariable<std::string> fakeName;
 	MTVariable<std::string> fakeEmail;
 	MTVariable<int32_t> fakeWalletBalance;
-	MTVariable<unsigned int> logLevel;
+	MTVariable<uint32_t> logLevels;
+	MTVariable<bool> dumpInterfaceMaps;
 	MTVariable<bool> extendedLogging;
 
 	// API Auth
@@ -74,72 +83,101 @@ public:
 	MTVariable<std::string> ryuuKey;
 
 
+	std::mutex appsChangedMutex;
+	std::unordered_set<AppId_t> newApps;
+	std::unordered_set<AppId_t> removedApps;
+
 	//Using incomplete class to avoid runtime linking errors
 	CFileWatcher* watcher;
 
 	~CConfig();
 
-	std::string getDir();
-	std::string getPath();
+	std::string getDir() const;
+	std::string getPath() const;
 	std::string getPluginDir();
-	bool createFile();
+	bool createFile() const;
 	bool init();
 
-	void setError(ELoadError err);
-	bool loadSettings();
+	void setError(const ELoadError err, const char* keyName);
+	bool loadSettings(const bool firstLoad = false);
 
 	template<typename T>
-	T getSetting(YAML::Node& node, const char* name, T defVal)
+	T getSetting(const YAML::Node& node, const char* name, const T defVal, const bool silent = false)
 	{
 		if (!node[name])
 		{
-			//g_pLog->info("Missing %s in configfile! Using default", name);
-			setError(ELoadError::MissingKey);
+			//LOG_NOTIFYLONG("Missing %s in configfile! Using default", name);
+			setError(ELoadError::MissingKey, name);
 			return defVal;
 		}
 
 		try
 		{
-			 return node[name].as<T>();
+			const T val = node[name].as<T>();
+
+			if (silent)
+			{
+				return val;
+			}
+
+			if constexpr (std::is_same_v<T, std::string>)
+			{
+				LOG_CUSTOM(k_ELogLevelInfo | k_ELogLevelOnce, "%s is \"%s\"\n", name, val.c_str());
+			}
+			else
+			{
+				LOG_CUSTOM(k_ELogLevelInfo | k_ELogLevelOnce, "%s is %s\n", name, std::to_string(val).c_str());
+			}
+
+			return val;
 		}
 		catch (YAML::BadConversion& er)
 		{
-			//g_pLog->info("Failed to parse value of %s! Using default\n", name);
-			setError(ELoadError::ParsingException);
+			//LOG_NOTIFY("Failed to parse value of %s! Using default\n", name);
+			setError(ELoadError::ParsingException, name);
 			return defVal;
 		}
-	};
+	}
 
 	template<typename T>
-	std::unordered_set<T> getList(YAML::Node& rootNode, const char* name)
+	std::unordered_set<T> getList(const YAML::Node& rootNode, const char* name, const bool silent = false)
 	{
 		auto list = std::unordered_set<T>();
 
 		const auto node = rootNode[name];
 		if (!node)
 		{
-			//g_pLog->info("Missing %s in configfile! Using default", name);
-			setError(ELoadError::MissingKey);
+			//LOG_NOTIFYLONG("Missing %s in configfile! Using default", name);
+			setError(ELoadError::MissingKey, name);
 			return list;
 		}
 
-		for(auto subNode : node)
+		for (auto subNode : node)
 		{
 			try
 			{
-				T val = subNode.as<T>();
+				const T val = subNode.as<T>();
 				list.emplace(val);
 
-				//TODO: Find better way to log shit
-				if (std::is_same_v<T, uint32_t>)
+				if (silent)
 				{
-					g_pLog->info("Added %u to %s\n", val, name);
+					continue;
 				}
+
+				if constexpr (std::is_same_v<T, std::string>)
+				{
+					LOG_CUSTOM(k_ELogLevelInfo | k_ELogLevelOnce, "Adding \"%s\" to %s\n", val.c_str(), name);
+				}
+				else
+				{
+					LOG_CUSTOM(k_ELogLevelInfo | k_ELogLevelOnce, "Adding %s to %s\n", std::to_string(val).c_str(), name);
+				}
+
 			}
 			catch(...)
 			{
-				//g_pLog->info("Failed to parse %s!", name);
-				setError(ELoadError::ParsingException);
+				//LOG_NOTIFY("Failed to parse %s!", name);
+				setError(ELoadError::ParsingException, name);
 			}
 		}
 
@@ -147,56 +185,61 @@ public:
 	}
 
 	template<typename T, typename T2>
-	std::unordered_map<T, T2> getMap(YAML::Node& rootNode, const char* name)
+	std::unordered_map<T, T2> getMap(const YAML::Node& rootNode, const char* name, const bool silent = false)
 	{
 		auto map = std::unordered_map<T, T2>();
 
 		const auto node = rootNode[name];
 		if (!node)
 		{
-			//g_pLog->info("Missing %s in configfile! Using default", name);
-			setError(ELoadError::MissingKey);
+			//LOG_NOTIFYLONG("Missing %s in configfile! Using default", name);
+			setError(ELoadError::MissingKey, name);
 			return map;
 		}
 
-		for(auto& subNode : node)
+		for (auto& subNode : node)
 		{
 			try
 			{
 				//TODO: Add error checks for failed parsing since yaml-cpp does not throw
-				auto k = subNode.first.as<T>();
-				auto v = subNode.second.as<T2>();
+				const auto k = subNode.first.as<T>();
+				const auto v = subNode.second.as<T2>();
 
 				map[k] = v;
 
-				if (std::is_same_v<T, uint32_t> && std::is_same_v<T, T2>)
+				if (silent)
 				{
-					g_pLog->info("Added %u to %u in %s\n", k, v, name);
+					continue;
 				}
-				else if (std::is_same_v<T, uint32_t> && std::is_same_v<T2, uint64_t>)
+
+				if constexpr (std::is_same_v<T2, std::string>)
 				{
-					g_pLog->info("Added %u to %llu in %s\n", k, v, name);
+					LOG_CUSTOM(k_ELogLevelInfo | k_ELogLevelOnce, "Adding %s: \"%s\" to %s\n", std::to_string(k).c_str(), v.c_str(), name);
+				}
+				else
+				{
+					LOG_CUSTOM(k_ELogLevelInfo | k_ELogLevelOnce, "Adding %s: %s to %s\n", std::to_string(k).c_str(), std::to_string(v).c_str(), name);
 				}
 			}
 			catch(...)
 			{
-				//g_pLog->info("Failed to parse %s!", name);
-				setError(ELoadError::ParsingException);
+				//LOG_NOTIFY("Failed to parse %s!", name);
+				setError(ELoadError::ParsingException, name);
 			}
 		}
 
 		return map;
 	}
 
-	bool isAddedAppId(uint32_t appId);
-	bool addAdditionalAppId(uint32_t appId);
+	bool isAddedAppId(const AppId_t appId);
+	bool addAdditionalAppId(const AppId_t appId);
 	bool removeAdditionalAppId(uint32_t appId);
 	
 	// Write auth to config.yaml
 	bool updateApiAuth(const std::string& morrenusKey, const std::string& ryuuKey);
 
-	bool shouldExcludeAppId(uint32_t appId);
-	uint32_t getDenuvoGameOwner(uint32_t appId);
+	bool shouldExcludeAppId(const AppId_t appId, const bool ignoreAdditionalApps = false);
+	CSteamId getDenuvoGameOwner(const AppId_t appId);
 };
 
 extern CConfig g_config;

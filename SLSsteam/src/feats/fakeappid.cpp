@@ -2,81 +2,224 @@
 
 #include "../config.hpp"
 
-#include "../sdk/CProtoBufMsgBase.hpp"
-#include "../sdk/CSteamEngine.hpp"
-#include "../sdk/CSteamMatchmakingServers.hpp"
-#include "../sdk/CUser.hpp"
-#include "../sdk/IClientUtils.hpp"
+#include <algorithm>
+#include <fstream>
+#include <iterator>
+#include <regex>
+#include <string>
 
-uint32_t FakeAppIds::lastAppLaunched;
 
-std::unordered_map<uint32_t, uint32_t> FakeAppIds::fakeAppIdMap = std::unordered_map<uint32_t, uint32_t>();
-std::unordered_map<uint32_t, uint32_t> FakeAppIds::fakeAppIdMapServer = std::unordered_map<uint32_t, uint32_t>();
-std::unordered_map<uint64_t, uint32_t> FakeAppIds::fakeAppIdMapPings = std::unordered_map<uint64_t, uint32_t>();
+std::unordered_map<HSteamPipe, AppId_t> FakeAppIds::fakeAppIdMap = std::unordered_map<HSteamPipe, AppId_t>();
+std::unordered_map<uint32_t, AppId_t> FakeAppIds::fakeAppIdMapServer = std::unordered_map<uint32_t, AppId_t>();
+std::unordered_map<uint64_t, AppId_t> FakeAppIds::fakeAppIdMapPings = std::unordered_map<uint64_t, AppId_t>();
 
-uint32_t FakeAppIds::getFakeAppId(uint32_t appId)
+AppId_t FakeAppIds::getFakeAppId(const AppId_t appId)
 {
-	auto fakeAppIds = g_config.fakeAppIds.get();
+	const auto fakeAppIds = g_config.fakeAppIds.get();
 
 	if (fakeAppIds.contains(appId))
 	{
-		return fakeAppIds[appId];
+		return fakeAppIds.at(appId);
 	}
 	else if (fakeAppIds.contains(0) && !g_pSteamEngine->getUser(0)->isSubscribed(appId))
 	{
-		return fakeAppIds[0];
+		return fakeAppIds.at(0);
 	}
 
 	return 0;
 }
 
-uint32_t FakeAppIds::getRealAppIdForCurrentPipe(bool fallback)
+AppId_t FakeAppIds::getRealAppIdFromEnv(const HSteamPipe pipe)
 {
-	uint32_t hPipe = *g_pClientUtils->getPipeIndex();
-	if (fakeAppIdMap.contains(hPipe))
+	if (fakeAppIdMap.contains(pipe))
 	{
-		return fakeAppIdMap[hPipe];
+		return fakeAppIdMap.at(pipe);
+	}
+
+	const auto serverPipe = g_pSteamEngine->getServerPipe(pipe);
+	if (!serverPipe)
+	{
+		LOG_ERROR("ServerPipe for %p is null!\n", reinterpret_cast<void*>(pipe));
+		return 0;
+	}
+
+	std::ostringstream pathSS;
+
+	pathSS << "/proc/" << serverPipe->pid << "/comm";
+	const auto commPath = pathSS.str();
+
+	std::string exeName;
+	auto ifstream = std::ifstream(commPath);
+
+	if (ifstream.is_open())
+	{
+		exeName = std::string(std::istreambuf_iterator(ifstream), {});
+		if (exeName.ends_with("\n"))
+		{
+			exeName = exeName.substr(0, exeName.size() - 1);
+		}
+	}
+	else
+	{
+		exeName = "Unknown";
+		LOG_WARN("Failed to read %s! ExeName will be unknown in logs\n", commPath.c_str());
+	}
+
+	pathSS.str("");
+	pathSS.clear();
+	pathSS << "/proc/" << serverPipe->pid << "/environ";
+
+	const auto environPath = pathSS.str();
+	ifstream = std::ifstream(environPath);
+
+	AppId_t appId = 0;
+
+	if (!ifstream.is_open())
+	{
+		LOG_ERROR("Failed to open %s for %s to get 0x%x's appId!\n", environPath.c_str(), exeName.c_str(), pipe);
+		fakeAppIdMap[pipe] = 0;
+		return 0;
+	}
+
+	std::string environ = std::string(std::istreambuf_iterator(ifstream), {});
+	auto reAppId = std::regex("SteamAppId=[0-9]+");
+	std::smatch appIdMatch;
+
+	if (std::regex_search(environ, appIdMatch, reAppId))
+	{
+		reAppId = std::regex("[0-9]+");
+		environ = appIdMatch.str();
+		std::regex_search(environ, appIdMatch, reAppId);
+
+		appId = std::stoul(appIdMatch.str());
+	}
+	else
+	{
+		LOG_ERROR("No SteamAppId in %s for %s! Using 0\n", environPath.c_str(), exeName.c_str());
+	}
+
+	fakeAppIdMap[pipe] = appId;
+
+	LOG_DEBUG("AppId for process %s in 0x%x is %u\n", exeName.c_str(), pipe, appId);
+	return appId;
+}
+
+AppId_t FakeAppIds::getRealAppIdForCurrentPipe(const bool fallback)
+{
+	const auto utils = g_pSteamEngine->getUtils();
+	if (!utils)
+	{
+		return 0;
+	}
+
+	const AppId_t appId = getRealAppIdFromEnv(utils->getCurrentSteamPipe());
+	if (appId)
+	{
+		return appId;
 	}
 
 	if (fallback)
 	{
-		return g_pClientUtils->getAppId();
+		return utils->getAppId();
 	}
 
 	return 0;
 }
 
-void FakeAppIds::launchApp(uint32_t appId)
+bool FakeAppIds::shouldUseRealAppIdForInterface(const EIPCInterface type)
 {
-	lastAppLaunched = appId;
+	switch(type)
+	{
+		//case EIPCInterface::User:
+		//case EIPCInterface::GameServerInternal:
+		//case EIPCInterface::Friends:
+		case EIPCInterface::Utils:
+		case EIPCInterface::Billing:
+		//case EIPCInterface::Matchmaking:
+		case EIPCInterface::Apps:
+		case EIPCInterface::UserStats:
+		//case EIPCInterface::Networking:
+		case EIPCInterface::RemoteStorage:
+		case EIPCInterface::DepotBuilder:
+		case EIPCInterface::AppManager:
+		case EIPCInterface::ConfigStore:
+		//case EIPCInterface::GameCoordinator:
+		//case EIPCInterface::GameServerStats:
+		case EIPCInterface::GameStats:
+		case EIPCInterface::HTTP:
+		case EIPCInterface::Screenshots:
+		case EIPCInterface::Audio:
+		case EIPCInterface::UnifiedMessages:
+		case EIPCInterface::StreamLauncher:
+		case EIPCInterface::ParentalSettings:
+		case EIPCInterface::NetworkDeviceManager:
+		case EIPCInterface::Music:
+		case EIPCInterface::RemoteClientManager:
+		case EIPCInterface::UGC:
+		case EIPCInterface::StreamClient:
+		case EIPCInterface::ProductBuilder:
+		case EIPCInterface::Shortcuts:
+		case EIPCInterface::GameNotifications:
+		case EIPCInterface::Video:
+		case EIPCInterface::Inventory:
+		case EIPCInterface::VR:
+		case EIPCInterface::ControllerSerialized:
+		case EIPCInterface::AppDisableUpdate:
+		case EIPCInterface::SharedConnection:
+		case EIPCInterface::Shader:
+		//case EIPCInterface::NetworkingSocketsSerialized:
+		case EIPCInterface::Compat:
+		case EIPCInterface::Parties:
+		//case EIPCInterface::NetworkingUtilsSerialized:
+		case EIPCInterface::RemotePlay:
+		//case EIPCInterface::GameServerPacketHandler:
+		case EIPCInterface::SystemManager:
+		case EIPCInterface::SystemPerfManager:
+		case EIPCInterface::SystemDockManager:
+		case EIPCInterface::SystemAudioManager:
+		case EIPCInterface::SystemDisplayManager:
+		case EIPCInterface::Timeline:
+			return true;
+
+		default:
+			return false;
+	}
 }
 
-void FakeAppIds::setAppIdForCurrentPipe(uint32_t& appId)
+void FakeAppIds::closePipe(const HSteamPipe pipe)
 {
-	//Keep track of every AppId, for various reasons
-	//fakeAppIdMap[*g_pClientUtils->getPipeIndex()] = appId;
-	fakeAppIdMap[*g_pClientUtils->getPipeIndex()] = lastAppLaunched;
+	if (fakeAppIdMap.contains(pipe))
+	{
+		LOG_DEBUG("Deleting fake appId mapping %u for 0x%x\n", fakeAppIdMap.at(pipe), pipe);
+		fakeAppIdMap.erase(pipe);
+	}
+}
 
-	g_pLog->debug("fakeAppIdMap[%p] = %u\n", *g_pClientUtils->getPipeIndex(), appId);
-
+void FakeAppIds::setAppIdForCurrentPipe(AppId_t& appId)
+{
 	//Do not change Steam Client itself (AppId 0)
 	if (!appId)
 	{
 		return;
 	}
 
-	uint32_t newAppId = getFakeAppId(appId);
+	const AppId_t newAppId = getFakeAppId(appId);
 	if (newAppId)
 	{
-		g_pLog->once("Changing AppId of %u\n", appId);
+		LOG_DEBUG("Changing AppId of %u\n", appId);
 		appId = newAppId;
 	}
 }
 
-void FakeAppIds::runIPCFrame(bool post)
+void FakeAppIds::runIPCFrame(const bool post, const EIPCInterface interface)
 {
-	uint32_t appId = getRealAppIdForCurrentPipe(false);
-	uint32_t fakeAppId = getFakeAppId(appId);
+	if (!shouldUseRealAppIdForInterface(interface))
+	{
+		return;
+	}
+
+	AppId_t appId = getRealAppIdForCurrentPipe(false);
+	const AppId_t fakeAppId = getFakeAppId(appId);
 
 	if (!appId || !fakeAppId || appId == fakeAppId)
 	{
@@ -88,34 +231,38 @@ void FakeAppIds::runIPCFrame(bool post)
 		appId = fakeAppId;
 	}
 
-	g_pLog->debug("Setting AppId to %u in pipe %p\n", appId, *g_pClientUtils->getPipeIndex());
+	if (g_config.extendedLogging.get())
+	{
+		const auto utils = g_pSteamEngine->getUtils();
+		LOG_DEBUG("Setting AppId to %u in pipe 0x%x\n", appId, utils ? utils->getCurrentSteamPipe() : 0);
+	}
+
 	g_pSteamEngine->setAppIdForCurrentPipe(appId);
 }
 
-void FakeAppIds::getServerDetails(uint32_t handle, gameserverdetails_t& details)
+void FakeAppIds::getServerDetails(const uint32_t handle, gameserverdetails_t& details)
 {
 	if (!fakeAppIdMapServer.contains(handle))
 	{
 		return;
 	}
 
-	const uint32_t realAppId = fakeAppIdMapServer[handle];
-
-	fakeAppIdMapPings[*reinterpret_cast<uint64_t*>(&details.address)] = realAppId;
+	const AppId_t realAppId = fakeAppIdMapServer[handle];
+	fakeAppIdMapPings[details.ip64] = realAppId;
 	details.appId = realAppId;
 
-	g_pLog->debug("Changing appId back to %u\n", realAppId);
+	LOG_DEBUG("Changing appId back to %u\n", realAppId);
 }
 
-uint32_t FakeAppIds::requestInternetServerList(uint32_t appId)
+uint32_t FakeAppIds::requestInternetServerList(const AppId_t appId)
 {
-	const uint32_t fake = getFakeAppId(appId);
+	const AppId_t fake = getFakeAppId(appId);
 	if (!fake)
 	{
 		return 0;
 	}
 
-	g_pLog->debug("Replacing %u with %u\n", appId, fake);
+	LOG_DEBUG("Replacing %u with %u\n", appId, fake);
 	return fake;
 }
 
@@ -126,7 +273,7 @@ void FakeAppIds::pingResponse(gameserverdetails_t *details)
 		return;
 	}
 
-	const uint64_t ip = *reinterpret_cast<uint64_t*>(&details->address);
+	const uint64_t ip = details->ip64;
 	if (!fakeAppIdMapPings.contains(ip))
 	{
 		return;
@@ -135,31 +282,67 @@ void FakeAppIds::pingResponse(gameserverdetails_t *details)
 	details->appId = fakeAppIdMapPings[ip];
 }
 
-
-void FakeAppIds::sendMsg(CProtoBufMsgBase* msg)
+void FakeAppIds::sendGamesPlayed(CNetPacket *pkt)
 {
-	switch(msg->type)
-	{
-		case EMSG_GAMESPLAYED:
-		case EMSG_GAMESPLAYED_NO_DATABLOB:
-		case EMSG_GAMESPLAYED_WITH_DATABLOB:
-			break;
+	auto msg = pkt->deserializeBody<CMsgClientGamesPlayed>();
 
-		default:
-			return;
-	}
-
-	const auto body = msg->getBody<CMsgClientGamesPlayed>();
-	for(int i = 0; i < body->games_played_size(); i++)
+	for (int i = 0; i < msg.games_played_size(); i++)
 	{
-		const auto game = body->mutable_games_played(i);
-		const uint32_t fakeAppId = FakeAppIds::getFakeAppId(game->game_id());
+		const auto game = msg.mutable_games_played(i);
+		const uint64_t gameId = game->game_id();
+
+		if (gameId & GAME_TYPE_SHORTCUT)
+		{
+			continue;
+		}
+
+		const AppId_t fakeAppId = FakeAppIds::getFakeAppId(gameId);
 		if (!fakeAppId)
 		{
 			continue;
 		}
 
-		g_pLog->debug("Setting %llu to %u\n", game->game_id(), fakeAppId);
+		LOG_DEBUG("Setting %llu to %u\n", gameId, fakeAppId);
 		game->set_game_id(fakeAppId);
+	}
+
+	pkt->serialize(msg);
+}
+
+void FakeAppIds::sendRichPresenceUpload(CNetPacket* pkt)
+{
+	auto header = pkt->deserializeHeader();
+	LOG_DEBUG("Routing appId %u\n", header.routing_appid());
+
+	const auto appId = getFakeAppId(header.routing_appid());
+
+	if (!appId)
+	{
+		return;
+	}
+
+	//This won't fix localized rich presences, but it's better than nothing
+	header.set_routing_appid(appId);
+
+	auto msg = pkt->deserializeBody<CMsgClientRichPresenceUpload>();
+	pkt->serialize(msg, &header);
+}
+
+void FakeAppIds::sendMsg(CNetPacket* pkt)
+{
+	switch(pkt->getProtoBufType())
+	{
+		case k_EMsgClientGamesPlayed:
+		case k_EMsgClientGamesPlayedNoDataBlob:
+		case k_EMsgClientGamesPlayedWithDataBlob:
+			sendGamesPlayed(pkt);
+			break;
+		
+		case k_EMsgClientRichPresenceUpload:
+			sendRichPresenceUpload(pkt);
+			break;
+
+		default:
+			break;
 	}
 }

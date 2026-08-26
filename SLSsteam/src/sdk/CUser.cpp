@@ -1,20 +1,42 @@
 #include "CUser.hpp"
 
-#include "CAppOwnershipInfo.hpp"
-#include "EResult.hpp"
+#include "CUser.hpp"
+#include "IClientAppManager.hpp"
+#include "IClientApps.hpp"
+#include "IClientUser.hpp"
 
 #include "../hooks.hpp"
 #include "../patterns.hpp"
 
+#include "libmem/libmem.h"
 
-bool CUser::checkAppOwnership(uint32_t appId, CAppOwnershipInfo* pInfo)
+
+IClientAppManager* CUser::getAppManager()
+{
+	const static lm_address_t offset = *reinterpret_cast<lm_address_t*>(Patterns::CUser::m_OffsetUserAppManager.address + 2);
+	return reinterpret_cast<IClientAppManager*>(this + offset);
+}
+
+IClientApps* CUser::getClientApps()
+{
+	const static lm_address_t offset = *reinterpret_cast<lm_address_t*>(Patterns::CUser::m_OffsetUserAppInfo.address + 2);
+	return reinterpret_cast<IClientApps*>(this + offset);
+}
+
+IClientUser* CUser::getClientUser()
+{
+	const static lm_address_t offset = *reinterpret_cast<lm_address_t*>(Patterns::CUser::m_OffsetClientUser.address + 1);
+	return reinterpret_cast<IClientUser*>(this + offset);
+}
+
+bool CUser::checkAppOwnership(const AppId_t appId, AppOwnershipInfo_t* pInfo)
 {
 	return Hooks::CUser_CheckAppOwnership.tramp.fn(this, appId, pInfo);
 }
 
-bool CUser::isSubscribed(uint32_t appId)
+bool CUser::isSubscribed(const AppId_t appId)
 {
-	CAppOwnershipInfo info {};
+	AppOwnershipInfo_t info {};
 	if (!checkAppOwnership(appId, &info))
 	{
 		return false;
@@ -23,20 +45,20 @@ bool CUser::isSubscribed(uint32_t appId)
 	return info.ownsLicense && !info.licenseExpired;
 }
 
-void CUser::postCallback(ECallbackType type, void* pCallback, uint32_t callbackSize)
+void CUser::postCallback(const ECallbackType type, void* pCallback, const uint32_t callbackSize)
 {
 	const static auto fn = reinterpret_cast<void(*)(void*, ECallbackType, void*, uint32_t, uint32_t)>(Patterns::CUser::PostCallback.address);
 	fn(this, type, pCallback, callbackSize, 0);
 }
 
-void CUser::updateAppOwnershipTicket(uint32_t appId, void* pTicket, uint32_t len)
+void CUser::updateAppOwnershipTicket(const AppId_t appId, void* pTicket, const uint32_t len)
 {
 	const static auto fn = reinterpret_cast<void(*)(void*, uint32_t, void*, uint32_t)>(Patterns::CUser::UpdateAppOwnershipTicket.address);
 	fn(this, appId, pTicket, len);
 
 	//Dunno if this achieves anything, but the client does it so we do too
 	AppOwnershipTicketReceived_t cb;
-	cb.result = ERESULT_OK;
+	cb.result = k_EResultOK;
 	cb.appId = appId;
 	postCallback(ECallbackType::AppOwnershipTicketReceived_t, &cb, sizeof(cb));
 }

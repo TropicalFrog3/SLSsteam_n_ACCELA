@@ -1,41 +1,45 @@
 #pragma once
 
-#include <cstdint>
-#include <map>
-#include <string>
+#include "../sdk/sdk.hpp"
 
-class CMsgClientGetAppOwnershipTicketResponse;
-class CMsgClientRequestEncryptedAppTicketResponse;
-class CProtoBufMsgBase;
+#include <string>
+#include <unordered_map>
+
 
 namespace Ticket
 {
 	class SavedTicket
 	{
 public:
-		uint32_t steamId;
+		CSteamId steamId;
 		std::string ticket;
+
+		constexpr bool isValid() const
+		{
+			return steamId.isSet() && ticket.size() > 0;
+		}
 	};
 
-	extern uint32_t oneTimeSteamIdSpoof;
-	extern std::map<uint32_t, SavedTicket> ticketMap;
-	extern std::map<uint32_t, SavedTicket> encryptedTicketMap;
+	extern std::unordered_map<AppId_t, CSteamId> oneTimeSteamIdSpoof;
+	extern std::unordered_map<AppId_t, SavedTicket> ticketMap;
+	extern std::unordered_map<AppId_t, SavedTicket> encryptedTicketMap;
 
 	std::string getTicketDir();
 
 	//TODO: Fill with error checks
-	std::string getTicketPath(uint32_t appId);
-	SavedTicket getCachedTicket(uint32_t appId);
-	bool saveTicketToCache(CMsgClientGetAppOwnershipTicketResponse* resp);
+	std::string getTicketPath(const AppId_t appId);
+	SavedTicket* getCachedTicket(const AppId_t appId);
+	bool saveTicketToCache(const CMsgClientGetAppOwnershipTicketResponse& resp);
 
-	void launchApp(uint32_t appId);
-	void getTicketOwnershipExtendedData(uint32_t appId);
+	void launchApp(const AppId_t appId);
+	void getEncryptedAppTicket(const AppId_t appId);
+	void getTicketOwnershipExtendedData(const AppId_t appId);
 
-	std::string getEncryptedTicketPath(uint32_t appId);
-	SavedTicket getCachedEncryptedTicket(uint32_t appId);
-	bool saveEncryptedTicketToCache(CMsgClientRequestEncryptedAppTicketResponse* resp);
+	std::string getEncryptedTicketPath(const AppId_t appId);
+	SavedTicket* getCachedEncryptedTicket(const AppId_t appId);
+	bool saveEncryptedTicketToCache(const CMsgClientRequestEncryptedAppTicketResponse& resp);
 
-	void recvEncryptedAppTicket(CMsgClientRequestEncryptedAppTicketResponse* msg);
-	void recvAppTicket(CMsgClientGetAppOwnershipTicketResponse* msg);
-	void recvMsg(CProtoBufMsgBase* msg);
+	void recvEncryptedAppTicket(CNetPacket* pkt);
+	void recvAppTicket(const CNetPacket* pkt);
+	void recvMsg(CNetPacket* pkt);
 }

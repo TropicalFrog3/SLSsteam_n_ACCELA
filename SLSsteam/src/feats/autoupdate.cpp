@@ -110,13 +110,13 @@ namespace AutoUpdate
 
     static void doCheckAndPrompt()
     {
-        g_pLog->info("AutoUpdate: Checking for updates...\n");
+        LOG_INFO("AutoUpdate: Checking for updates...\n");
 
         std::string data;
         int res = Curl::getString(REMOTE_VERSION_URL, data);
         if (res != 0)
         {
-            g_pLog->debug("AutoUpdate: Failed to fetch remote version (curl code %d)\n", res);
+            LOG_DEBUG("AutoUpdate: Failed to fetch remote version (curl code %d)\n", res);
             return;
         }
 
@@ -142,17 +142,17 @@ namespace AutoUpdate
         }
         catch (const std::exception& e)
         {
-            g_pLog->warn("AutoUpdate: Failed to parse remote version manifest: %s\n", e.what());
+            LOG_WARN("AutoUpdate: Failed to parse remote version manifest: %s\n", e.what());
             return;
         }
 
         if (!isRemoteNewer(VERSION, remoteVersionStr))
         {
-            g_pLog->info("AutoUpdate: Already up to date (Local: %s, Remote: %s)\n", VERSION, remoteVersionStr.c_str());
+            LOG_INFO("AutoUpdate: Already up to date (Local: %s, Remote: %s)\n", VERSION, remoteVersionStr.c_str());
             return;
         }
 
-        g_pLog->info("AutoUpdate: Newer version available (Local: %s, Remote: %s)\n", VERSION, remoteVersionStr.c_str());
+        LOG_INFO("AutoUpdate: Newer version available (Local: %s, Remote: %s)\n", VERSION, remoteVersionStr.c_str());
 
         // Replace version placeholder in DownloadUrl
         size_t pos = downloadUrl.find("${version}");
@@ -169,7 +169,7 @@ namespace AutoUpdate
         pid_t pid = fork();
         if (pid < 0)
         {
-            g_pLog->warn("AutoUpdate: fork() failed for update prompt\n");
+            LOG_WARN("AutoUpdate: fork() failed for update prompt\n");
             return;
         }
 
@@ -185,7 +185,7 @@ namespace AutoUpdate
         int status = 0;
         if (waitpid(pid, &status, 0) < 0)
         {
-            g_pLog->warn("AutoUpdate: waitpid() failed on prompt\n");
+            LOG_WARN("AutoUpdate: waitpid() failed on prompt\n");
             return;
         }
 
@@ -197,7 +197,7 @@ namespace AutoUpdate
         int exitStatus = WEXITSTATUS(status);
         if (exitStatus == 127)
         {
-            g_pLog->info("AutoUpdate: zenity not found. Falling back to notify-send alert.\n");
+            LOG_INFO("AutoUpdate: zenity not found. Falling back to notify-send alert.\n");
             system("notify-send -u normal \"SLSsteam\" \"Update available! Newer version is ready. Run setup.sh to update.\"");
             return;
         }
@@ -205,19 +205,19 @@ namespace AutoUpdate
         if (exitStatus != 0)
         {
             // User cancelled/closed the dialog
-            g_pLog->info("AutoUpdate: User declined the update.\n");
+            LOG_INFO("AutoUpdate: User declined the update.\n");
             return;
         }
 
         // User clicked "Install"
-        g_pLog->info("AutoUpdate: User accepted update. Starting download...\n");
+        LOG_INFO("AutoUpdate: User accepted update. Starting download...\n");
         system("notify-send -t 5000 \"SLSsteam\" \"Downloading update...\"");
 
         // Determine destination folder
         const char* home = getenv("HOME");
         if (!home)
         {
-            g_pLog->warn("AutoUpdate: HOME environment variable not set, aborting update.\n");
+            LOG_WARN("AutoUpdate: HOME environment variable not set, aborting update.\n");
             system("notify-send -u critical \"SLSsteam\" \"Update failed: HOME environment variable not found.\"");
             return;
         }
@@ -239,7 +239,7 @@ namespace AutoUpdate
 
         if (!downloadToFile(downloadUrl, archivePath))
         {
-            g_pLog->warn("AutoUpdate: Failed to download update from %s\n", downloadUrl.c_str());
+            LOG_WARN("AutoUpdate: Failed to download update from %s\n", downloadUrl.c_str());
             system("notify-send -u critical \"SLSsteam\" \"Update failed: Download failed.\"");
             return;
         }
@@ -302,7 +302,7 @@ namespace AutoUpdate
 
         if (!extracted)
         {
-            g_pLog->warn("AutoUpdate: Extraction failed for %s\n", archivePath.c_str());
+            LOG_WARN("AutoUpdate: Extraction failed for %s\n", archivePath.c_str());
             system("notify-send -u critical \"SLSsteam\" \"Update failed: Extraction tools not found or failed.\"");
             std::filesystem::remove(archivePath);
             std::filesystem::remove_all(extractDir);
@@ -311,7 +311,7 @@ namespace AutoUpdate
 
         // Instead of copying .so files while Steam is running (which crashes it),
         // we write a helper script that kills Steam first, then copies, then relaunches.
-        g_pLog->info("AutoUpdate: Preparing update installer script...\n");
+        LOG_INFO("AutoUpdate: Preparing update installer script...\n");
         system("notify-send -u normal \"SLSsteam\" \"Update downloaded! Applying update, please wait...\"");
 
         // Build the helper script that runs after Steam exits
@@ -321,7 +321,7 @@ namespace AutoUpdate
             std::ofstream script(scriptPath);
             if (!script.is_open())
             {
-                g_pLog->warn("AutoUpdate: Failed to create update script at %s\n", scriptPath.c_str());
+                LOG_WARN("AutoUpdate: Failed to create update script at %s\n", scriptPath.c_str());
                 system("notify-send -u critical \"SLSsteam\" \"Update failed: Could not create update script.\"");
                 std::filesystem::remove(archivePath);
                 std::filesystem::remove_all(extractDir);
@@ -375,7 +375,7 @@ namespace AutoUpdate
                     // Ensure parent directory exists
                     script << "mkdir -p \"" << destPath.parent_path().string() << "\"\n";
                     script << "cp -f \"" << entry.path().string() << "\" \"" << destPath.string() << "\"\n";
-                    g_pLog->info("AutoUpdate: Queued copy %s -> %s\n", filename.c_str(), destPath.c_str());
+                    LOG_INFO("AutoUpdate: Queued copy %s -> %s\n", filename.c_str(), destPath.c_str());
                 }
             }
 
@@ -408,7 +408,7 @@ namespace AutoUpdate
             _exit(127);
         }
 
-        g_pLog->info("AutoUpdate: Update script launched (PID %d). Steam will restart shortly.\n", scriptPid);
+        LOG_INFO("AutoUpdate: Update script launched (PID %d). Steam will restart shortly.\n", scriptPid);
     }
 
     void checkAndPrompt()

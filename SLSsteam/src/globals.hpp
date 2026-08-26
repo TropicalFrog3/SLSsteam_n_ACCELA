@@ -1,14 +1,12 @@
 #pragma once
 
-#include "libmem/libmem.h"
+#include "sdk/sdk.hpp"
 
-#include <cstdint>
-#include <cstdio>
+#include "libmem/libmem.h"
 
 
 extern lm_module_t g_modSteamClient;
 extern lm_module_t g_modSteamUI;
+extern lm_module_t g_modTier0;
 
-//Don't assign a pointer to IClientUser::GetSteamID! It's returned pointer
-//always points to the same address, but it's lifetime is very short
-extern uint32_t g_currentSteamId;
+extern CSteamId g_currentSteamId;

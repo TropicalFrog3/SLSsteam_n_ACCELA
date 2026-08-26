@@ -1,12 +1,13 @@
 #pragma once
 
-#include <cstdint>
+#include "types.hpp"
 
-class IClientUtils
+
+SDK_Class IClientUtils
 {
 public:
-	uint32_t* getPipeIndex();
-	uint32_t getAppId();
+	HSteamPipe getCurrentSteamPipe();
+	AppId_t getAppId();
 };
 
 extern IClientUtils* g_pClientUtils;

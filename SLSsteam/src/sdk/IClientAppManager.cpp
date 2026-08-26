@@ -5,14 +5,47 @@
 
 #include <cstdint>
 
-bool IClientAppManager::installApp(uint32_t appId, uint32_t librarIndex)
+
+uint32_t IClientAppManager::getLibraryFolderLabel(const uint32_t index, char* pChLabel, const uint32_t labelSize)
 {
-	return MemHlp::callVFunc<bool(*)(void*, uint32_t, uint32_t, uint8_t)>(VFTIndexes::IClientAppManager::InstallApp, this, appId, librarIndex, 0);
+	return MemHlp::callVFunc<uint32_t(*)(void*, uint32_t, char*, uint32_t)>
+	(
+		VFTIndexes::IClientAppManager::GetLibraryFolderLabel.index,
+		this,
+		index,
+		pChLabel,
+		labelSize
+	);
 }
 
-EAppState IClientAppManager::getAppInstallState(uint32_t appId)
+uint32_t IClientAppManager::getLibraryFolderPath(const uint32_t index, char* pChPath, const uint32_t pathSize)
 {
-	return MemHlp::callVFunc<EAppState(*)(void*, uint32_t)>(VFTIndexes::IClientAppManager::GetAppInstallState, this, appId);
+	return MemHlp::callVFunc<uint32_t(*)(void*, uint32_t, char*, uint32_t)>
+	(
+		VFTIndexes::IClientAppManager::GetLibraryFolderPath.index,
+		this,
+		index,
+		pChPath,
+		pathSize
+	);
 }
 
-IClientAppManager* g_pClientAppManager;
+uint32_t IClientAppManager::getNumLibraryFolders()
+{
+	return MemHlp::callVFunc<uint32_t(*)(void*)>(VFTIndexes::IClientAppManager::GetNumLibraryFolders.index, this);
+}
+
+bool IClientAppManager::installApp(const AppId_t appId, const uint32_t libraryIndex)
+{
+	return MemHlp::callVFunc<bool(*)(void*, AppId_t, uint32_t, uint8_t)>(VFTIndexes::IClientAppManager::InstallApp.index, this, appId, libraryIndex, 0);
+}
+
+uint32_t IClientAppManager::uninstallApp(const AppId_t appId)
+{
+	return MemHlp::callVFunc<uint32_t(*)(void*, AppId_t)>(VFTIndexes::IClientAppManager::UninstallApp.index, this, appId);
+}
+
+EAppState IClientAppManager::getAppInstallState(const AppId_t appId)
+{
+	return MemHlp::callVFunc<EAppState(*)(void*, AppId_t)>(VFTIndexes::IClientAppManager::GetAppInstallState.index, this, appId);
+}

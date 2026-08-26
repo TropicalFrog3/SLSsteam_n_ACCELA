@@ -3,7 +3,6 @@
 #include "../config.hpp"
 #include "../globals.hpp"
 #include "../sdk/CProtoBufMsgBase.hpp"
-#include "../sdk/EResult.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -37,7 +36,8 @@ void DepotKeys::scanLuaPluginsForDepotKeys()
 	std::string pluginDir = g_config.getPluginDir();
 	if (pluginDir.empty())
 	{
-		g_pLog->info("DepotKeys: Cannot locate plugin directory\n");
+		// LOG_INFO("DepotKeys: Cannot locate plugin directory\n");
+		LOG_INFO("DepotKeys: Cannot locate plugin directory\n");
 		return;
 	}
 
@@ -83,18 +83,20 @@ void DepotKeys::scanLuaPluginsForDepotKeys()
 				if (hexKey.size() == 64) // 32 bytes = 64 hex chars (AES-256)
 				{
 					newKeys[depotId] = hexKey;
-					g_pLog->info("DepotKeys: Loaded key for depot %u (from %s)\n",
-								 depotId, entry.path().filename().c_str());
+					// LOG_INFO("DepotKeys: Loaded key for depot %u (from %s)\n",
+					// 			 depotId, entry.path().filename().c_str());
+					LOG_INFO("DepotKeys: Loaded key for depot %u (from %s)\n",
+							 depotId, entry.path().filename().c_str());
 				}
 				else
 				{
-					g_pLog->info("DepotKeys: Unexpected key length %zu for depot %u\n",
+					LOG_INFO("DepotKeys: Unexpected key length %zu for depot %u\n",
 								 hexKey.size(), depotId);
 				}
 			}
 			catch (...)
 			{
-				g_pLog->info("DepotKeys: Failed to parse depot key in %s\n",
+				LOG_INFO("DepotKeys: Failed to parse depot key in %s\n",
 							 entry.path().c_str());
 			}
 		}
@@ -105,7 +107,7 @@ void DepotKeys::scanLuaPluginsForDepotKeys()
 		g_depotKeys = std::move(newKeys);
 	}
 
-	g_pLog->info("DepotKeys: Scan complete, loaded %zu depot key(s)\n", g_depotKeys.size());
+	LOG_INFO("DepotKeys: Scan complete, loaded %zu depot key(s)\n", g_depotKeys.size());
 }
 
 std::string DepotKeys::getDepotKey(uint32_t depotId)
@@ -138,19 +140,19 @@ static void handleDepotDecryptionKeyResponse(CProtoBufMsgBase* msg)
 	const uint32_t depotId = body->depot_id();
 	const int32_t result = body->eresult();
 
-	g_pLog->info("DepotKeys: Received decryption key response for depot %u, eresult=%d\n",
+	LOG_INFO("DepotKeys: Received decryption key response for depot %u, eresult=%d\n",
 				 depotId, result);
 
-	if (result == ERESULT_OK)
+	if (result == k_EResultOK)
 	{
-		g_pLog->debug("DepotKeys: Depot %u key received from Steam (OK)\n", depotId);
+		LOG_DEBUG_ONCE("DepotKeys: Depot %u key received from Steam (OK)\n", depotId);
 		return;
 	}
 
 	const std::string hexKey = DepotKeys::getDepotKey(depotId);
 	if (hexKey.empty())
 	{
-		g_pLog->info("DepotKeys: No cached key for depot %u (eresult=%d), cannot inject\n",
+		LOG_INFO("DepotKeys: No cached key for depot %u (eresult=%d), cannot inject\n",
 					 depotId, result);
 		return;
 	}
@@ -160,16 +162,16 @@ static void handleDepotDecryptionKeyResponse(CProtoBufMsgBase* msg)
 	CMsgClientGetDepotDecryptionKeyResponse localBody;
 	if (localBody.ParseFromString(body->SerializeAsString()))
 	{
-		localBody.set_eresult(ERESULT_OK);
+		localBody.set_eresult(k_EResultOK);
 		localBody.set_depot_encryption_key(keyBytes.data(), keyBytes.size());
 		body->ParseFromString(localBody.SerializeAsString());
 
-		g_pLog->info("DepotKeys: Injected cached key for depot %u (overriding eresult %d -> OK)\n",
+		LOG_INFO("DepotKeys: Injected cached key for depot %u (overriding eresult %d -> OK)\n",
 					 depotId, result);
 	}
 	else
 	{
-		g_pLog->info("DepotKeys: Failed to parse depot key response for depot %u\n", depotId);
+		LOG_INFO("DepotKeys: Failed to parse depot key response for depot %u\n", depotId);
 	}
 }
 
@@ -181,7 +183,7 @@ static void handleOwnershipTicketResponse(CProtoBufMsgBase* msg)
 	const uint32_t result = body->eresult();
 
 	// If successful, let the existing ticket system handle caching
-	if (result == ERESULT_OK)
+	if (result == k_EResultOK)
 	{
 		return;
 	}
@@ -192,7 +194,7 @@ static void handleOwnershipTicketResponse(CProtoBufMsgBase* msg)
 		return;
 	}
 
-	g_pLog->info("DepotKeys: Ownership ticket failed for ACCELA app %u (eresult=%u), injecting OK\n",
+	LOG_INFO("DepotKeys: Ownership ticket failed for ACCELA app %u (eresult=%u), injecting OK\n",
 				 appId, result);
 
 	// Set eresult to OK with an empty ticket — this tells Steam the app is "owned"
@@ -200,24 +202,24 @@ static void handleOwnershipTicketResponse(CProtoBufMsgBase* msg)
 	CMsgClientGetAppOwnershipTicketResponse localBody;
 	if (localBody.ParseFromString(body->SerializeAsString()))
 	{
-		localBody.set_eresult(ERESULT_OK);
+		localBody.set_eresult(k_EResultOK);
 		// Set a 50-byte dummy ticket that is structurally valid so Steam doesn't fail parsing
 		std::string dummyTicket(50, '\0');
 		uint32_t* pU32 = reinterpret_cast<uint32_t*>(dummyTicket.data());
 		pU32[0] = 50; // length
 		pU32[1] = 4;  // version
-		uint64_t steamId = 0x0110000100000000ULL | g_currentSteamId;
+		uint64_t steamId = 0x0110000100000000ULL | g_currentSteamId.steamId64;
 		*reinterpret_cast<uint64_t*>(dummyTicket.data() + 8) = steamId;
 		pU32[4] = appId; // offset 16 is appId
 
 		localBody.set_ticket(dummyTicket);
 		body->ParseFromString(localBody.SerializeAsString());
 
-		g_pLog->info("DepotKeys: Injected ownership ticket OK (with dummy struct) for app %u\n", appId);
+		LOG_INFO("DepotKeys: Injected ownership ticket OK (with dummy struct) for app %u\n", appId);
 	}
 	else
 	{
-		g_pLog->info("DepotKeys: Failed to parse ownership ticket response for app %u\n", appId);
+		LOG_INFO("DepotKeys: Failed to parse ownership ticket response for app %u\n", appId);
 	}
 }
 
@@ -229,7 +231,7 @@ void DepotKeys::recvMsg(CProtoBufMsgBase* msg)
 			handleDepotDecryptionKeyResponse(msg);
 			break;
 
-		case EMSG_APPOWNERSHIPTICKET_RESPONSE:
+		case k_EMsgClientGetAppOwnershipTicketResponse:
 			handleOwnershipTicketResponse(msg);
 			break;
 	}
@@ -244,6 +246,6 @@ void DepotKeys::sendMsg(CProtoBufMsgBase* msg)
 
 	auto body = msg->getBody<CMsgClientGetDepotDecryptionKey>();
 
-	g_pLog->info("DepotKeys: Requesting decryption key for depot %u (app %u)\n",
+	LOG_INFO("DepotKeys: Requesting decryption key for depot %u (app %u)\n",
 				 body->depot_id(), body->app_id());
 }

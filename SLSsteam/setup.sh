@@ -37,18 +37,18 @@ install_wrapper()
 	EXE="$1"
 	FPATH="$(type -P $EXE)"
 
+	if [ $? -ne 0 ]; then
+		echo "$EXE not found in path! Skipping"
+		return 1
+	fi
+
 	DIRNAME="$(dirname "$FPATH")"
 	if [ "$DIRNAME" = "$SLSPATH" ]; then
 		echo "$EXE wrapper already installed! Skipping"
 		return 0
 	fi
 
-	if [ $? -ne 0 ]; then
-		echo "$EXE not found in path! Skipping"
-		return 1
-	fi
-
-	echo -e "#!/bin/sh\n$SLSAUDIT \"$FPATH\"" > "$SLSPATH/$EXE"
+	echo -e "#!/bin/sh\n$SLSAUDIT \"$FPATH\"" > "$SLSPATH/$EXE" '$@'
 
 	chmod u+x "$SLSPATH/$EXE"
 

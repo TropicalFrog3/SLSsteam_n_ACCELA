@@ -1,54 +1,60 @@
 #include "misc.hpp"
 
-#include "../sdk/CProtoBufMsgBase.hpp"
-#include "../sdk/IClientUtils.hpp"
-
 #include "../config.hpp"
 #include "../sdk/protobufs/steammessages_clientserver_appinfo.pb.h"
 #include <fstream>
+#include "../globals.hpp"
 
 #include "fakeappid.hpp"
 
+
 bool Misc::shouldFakeOffline()
 {
-	if (!g_pClientUtils)
-	{
-		return false;
-	}
-	
-	const uint32_t appId = FakeAppIds::getRealAppIdForCurrentPipe();
+	const AppId_t appId = FakeAppIds::getRealAppIdForCurrentPipe();
 	if (!appId || !g_config.fakeOffline.get().contains(appId))
 	{
 		return false;
 	}
 
-	g_pLog->once("Faking offline mode for %u\n", appId);
+	LOG_ONCE("Faking offline mode for %u\n", appId);
 	return true;
 }
 
 
-void Misc::recvMsg(CProtoBufMsgBase *msg)
+void Misc::recvMsg(CNetPacket *pkt)
 {
-	g_pLog->info("recvMsg type %u\n", msg->type);
-	switch(msg->type)
+	switch(pkt->getProtoBufType())
 	{
-		case EMSG_WALLET_INFO_UPDATE:
+		case k_EMsgClientPersonaState:
 		{
-			const int32_t amount = g_config.fakeWalletBalance.get();
-			if (!amount)
+			const auto name = g_config.fakeName.get();
+			if (name.size() < 1)
 			{
 				return;
 			}
 
-			const auto body = msg->getBody<CMsgClientWalletInfoUpdate>();
-			body->set_has_wallet(true);
-			body->set_balance(amount);
-			body->set_balance64(amount);
+			auto msg = pkt->deserializeBody<CMsgClientPersonaState>();
+
+			for (int i = 0; i < msg.friends_size(); i++)
+			{
+				auto frnd = msg.mutable_friends(i);
+
+				if (frnd->friendid() != g_currentSteamId.steamId64)
+				{
+					continue;
+				}
+
+				frnd->set_player_name(name);
+				LOG_DEBUG("Faked self persona\n");
+
+				pkt->serialize(msg);
+				break;
+			}
 
 			break;
 		}
 
-		case EMSG_EMAIL_ADDRESS_INFO:
+		case k_EMsgClientEmailAddrInfo:
 		{
 			const auto email = g_config.fakeEmail.get();
 			if (email.size() < 1)
@@ -56,21 +62,39 @@ void Misc::recvMsg(CProtoBufMsgBase *msg)
 				return;
 			}
 
-			const auto body = msg->getBody<CMsgClientEmailAddrInfo>();
-			body->set_email_address(email);
-			body->set_email_is_validated(true);
+			auto msg = pkt->deserializeBody<CMsgClientEmailAddrInfo>();
+			msg.set_email_address(email);
+			msg.set_email_is_validated(true);
 
+			pkt->serialize(msg);
 			break;
 		}
 
-		case EMSG_PICS_PRODUCTINFO_RESPONSE:
+		case k_EMsgClientWalletInfoUpdate:
 		{
-			const auto body = msg->getBody<CMsgClientPICSProductInfoResponse>();
-			g_pLog->info("PICS Response: meta_data_only=%d, http_host=%s\n", body->meta_data_only(), body->http_host().c_str());
-			for (int i = 0; i < body->apps_size(); i++)
+			const int32_t amount = g_config.fakeWalletBalance.get();
+			if (!amount)
 			{
-				auto* app = body->mutable_apps(i);
-				g_pLog->info("Got PICS info for %u, has_buffer: %d\n", app->appid(), app->has_buffer());
+				return;
+			}
+
+			auto msg = pkt->deserializeBody<CMsgClientWalletInfoUpdate>();
+			msg.set_has_wallet(true);
+			msg.set_balance(amount);
+			msg.set_balance64(amount);
+
+			pkt->serialize(msg);
+			break;
+		}
+
+		case k_EMsgClientPICSProductInfoResponse:
+		{
+			auto msg = pkt->deserializeBody<CMsgClientPICSProductInfoResponse>();
+			LOG_INFO("PICS Response: meta_data_only=%d, http_host=%s\n", msg.meta_data_only(), msg.http_host().c_str());
+			for (int i = 0; i < msg.apps_size(); i++)
+			{
+				auto* app = msg.mutable_apps(i);
+				LOG_INFO("Got PICS info for %u, has_buffer: %d\n", app->appid(), app->has_buffer());
 				if (app->has_buffer())
 				{
 					std::string path = "/tmp/pics_" + std::to_string(app->appid()) + ".bin";
@@ -81,21 +105,25 @@ void Misc::recvMsg(CProtoBufMsgBase *msg)
 			}
 			break;
 		}
+
+		default:
+			break;
 	}
 }
-void Misc::sendMsg(CProtoBufMsgBase *msg)
+
+void Misc::sendMsg(CNetPacket *pkt)
 {
-	switch(msg->type)
+	switch(pkt->getProtoBufType())
 	{
-		case EMSG_PICS_PRODUCTINFO_REQUEST:
+		case k_EMsgClientPICSProductInfoRequest:
 		{
-			auto body = msg->getBody<CMsgClientPICSProductInfoRequest>();
-			g_pLog->info("PICS Request: meta_data_only=%d\n", body->meta_data_only());
+			auto msg = pkt->deserializeBody<CMsgClientPICSProductInfoRequest>();
+			LOG_INFO("PICS Request: meta_data_only=%d\n", msg.meta_data_only());
 			
-			for (int i = 0; i < body->apps_size(); i++)
+			for (int i = 0; i < msg.apps_size(); i++)
 			{
-				auto* app = body->mutable_apps(i);
-				g_pLog->info("Requesting PICS for app %u (has access token: %d)\n", app->appid(), app->has_access_token());
+				auto* app = msg.mutable_apps(i);
+				LOG_INFO("Requesting PICS for app %u (has access token: %d)\n", app->appid(), app->has_access_token());
 			}
 			
 			break;

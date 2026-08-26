@@ -1,32 +1,34 @@
 #pragma once
 
-#include <cstddef>
+#include "../sdk/sdk.hpp"
+
 #include <cstdint>
 #include <map>
 #include <set>
+#include <mutex>
+#include <unordered_set>
 
-class CAppOwnershipInfo;
-class CProtoBufMsgBase;
-class CMsgClientGamesPlayed;
-class CMsgClientPICSProductInfoRequest;
 
 namespace Apps
 {
 	void init();
 	extern bool applistRequested;
+	extern std::unordered_set<AppId_t> privateApps;
+
+	extern std::mutex pendingLicenseChangesMutex;
+	extern std::unordered_set<AppId_t> pendingLicenseChanges;
+
+	bool unlockApp(const AppId_t appId, AppOwnershipInfo_t* info, const CSteamId& ownerId);
+	bool unlockApp(const AppId_t appId, AppOwnershipInfo_t* info);
+
+	void buildDepotDependency(CUtlVector<DepotInfo_t>* depots, CUtlVector<DepotInfo_t>* sharedDepots);
+	bool checkAppOwnership(const AppId_t appId, AppOwnershipInfo_t* info);
+	void getLegacyCDKey(const AppId_t appId);
+	void getSubscribedApps(AppId_t* appList, const uint32_t size, uint32_t& count);
+	void parseProductInfoFromResponse(CMsgClientPICSProductInfoResponse* msg);
+	void runIPCFrame();
+
 	extern std::map<uint32_t, int> appIdOwnerOverride;
-
-	bool unlockApp(uint32_t appId, CAppOwnershipInfo* info, uint32_t ownerId);
-	bool unlockApp(uint32_t appId, CAppOwnershipInfo* info);
-
-	bool checkAppOwnership(uint32_t appId, CAppOwnershipInfo* info);
-	void getSubscribedApps(uint32_t* appList, uint32_t size, uint32_t& count);
-
-	bool shouldDisableCloud(uint32_t appId);
-	bool shouldDisableCDKey(uint32_t appId);
-	bool shouldDisableUpdates(uint32_t appId);
-
-
 	extern std::set<uint32_t> installedApps;
 	extern std::set<uint32_t> onlineFixApps;
 	extern std::set<uint32_t> autoCrackApps;
@@ -43,7 +45,16 @@ namespace Apps
 	bool isAutoCrackInstalled(uint32_t appId);
 	void setAutoCrackInstalled(uint32_t appId, bool installed);
 
-	void sendGamesPlayed(CMsgClientGamesPlayed* msg);
-	void sendPICSInfoRequest(CMsgClientPICSProductInfoRequest* msg);
-	void sendMsg(CProtoBufMsgBase* msg);
+	void postAppLicensesChanged(const std::unordered_set<AppId_t>& apps);
+
+	bool shouldDisableCloud(const AppId_t appId);
+	bool shouldDisableCDKey(const AppId_t appId);
+	bool shouldDisableUpdates(const AppId_t appId);
+
+	void sendAndRecvLastPlayedTimes(const char* name, CPlayer_GetLastPlayedTimes_Response* recv);
+	void sendGamesPlayed(CNetPacket* pkt);
+	void sendPICSInfoRequest(CNetPacket* pkt);
+	void sendMsg(CNetPacket* pkt);
+
+	void setConfigStoreString(const char* key, const char* value);
 };

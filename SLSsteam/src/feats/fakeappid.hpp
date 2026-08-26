@@ -1,33 +1,33 @@
 #pragma once
 
+#include "../sdk/sdk.hpp"
+
 #include <cstdint>
 #include <unordered_map>
 
-class CProtoBufMsgBase;
-
-struct gameserverdetails_t;
-struct servernetadr_t;
 
 namespace FakeAppIds
 {
-	extern uint32_t lastAppLaunched;
+	extern std::unordered_map<HSteamPipe, AppId_t> fakeAppIdMap;
+	extern std::unordered_map<uint32_t, AppId_t> fakeAppIdMapServer;
+	extern std::unordered_map<uint64_t, AppId_t> fakeAppIdMapPings;
 
-	extern std::unordered_map<uint32_t, uint32_t> fakeAppIdMap;
-	extern std::unordered_map<uint32_t, uint32_t> fakeAppIdMapServer;
-	extern std::unordered_map<uint64_t, uint32_t> fakeAppIdMapPings;
-
-	uint32_t getFakeAppId(uint32_t appId);
-	uint32_t getRealAppIdForCurrentPipe(bool fallback = true);
+	AppId_t getFakeAppId(const AppId_t appId);
+	AppId_t getRealAppIdFromEnv(const HSteamPipe pipe);
+	AppId_t getRealAppIdForCurrentPipe(const bool fallback = true);
+	bool shouldUseRealAppIdForInterface(const EIPCInterface type);
 
 	//General functionality
-	void launchApp(uint32_t appId);
-	void setAppIdForCurrentPipe(uint32_t& appId);
-	void runIPCFrame(bool post);
+	void closePipe(const HSteamPipe pipe);
+	void setAppIdForCurrentPipe(AppId_t& appId);
+	void runIPCFrame(const bool post, const EIPCInterface interface);
 
 	//Serverbrowser
-	void getServerDetails(uint32_t handle, gameserverdetails_t& details);
-	uint32_t requestInternetServerList(uint32_t appId);
+	void getServerDetails(const uint32_t handle, gameserverdetails_t& details);
+	uint32_t requestInternetServerList(const AppId_t appId);
 	void pingResponse(gameserverdetails_t* details);
 
-	void sendMsg(CProtoBufMsgBase* msg);
+	void sendGamesPlayed(CNetPacket* pkt);
+	void sendRichPresenceUpload(CNetPacket* pkt);
+	void sendMsg(CNetPacket* pkt);
 }

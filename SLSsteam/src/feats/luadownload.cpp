@@ -194,11 +194,11 @@ namespace LuaDownload
 
         if (res != CURLE_OK)
         {
-            g_pLog->debug("LuaDownload: API '%s' curl error: %s (code %d)\n", apiName.c_str(), curl_easy_strerror(res), res);
+            LOG_DEBUG("LuaDownload: API '%s' curl error: %s (code %d)\n", apiName.c_str(), curl_easy_strerror(res), res);
             
             // If it's an SSL error on a known problematic host, suggest a reason
             if (res == CURLE_SSL_CONNECT_ERROR || res == CURLE_PEER_FAILED_VERIFICATION) {
-                g_pLog->debug("LuaDownload: TLS handshake failed — check certificates or DNS settings.\n");
+                LOG_DEBUG("LuaDownload: TLS handshake failed — check certificates or DNS settings.\n");
             }
 
             if (headers) curl_slist_free_all(headers);
@@ -248,7 +248,7 @@ namespace LuaDownload
         pid_t pid = fork();
         if (pid < 0)
         {
-            g_pLog->debug("LuaDownload: fork() failed for unzip of %s\n", zipPath.c_str());
+            LOG_DEBUG("LuaDownload: fork() failed for unzip of %s\n", zipPath.c_str());
             return false;
         }
 
@@ -264,7 +264,7 @@ namespace LuaDownload
         int status = 0;
         if (waitpid(pid, &status, 0) < 0)
         {
-            g_pLog->debug("LuaDownload: waitpid() failed for unzip of %s\n", zipPath.c_str());
+            LOG_DEBUG("LuaDownload: waitpid() failed for unzip of %s\n", zipPath.c_str());
             return false;
         }
 
@@ -311,18 +311,18 @@ namespace LuaDownload
 
     bool downloadAndInstall(const std::string& appId)
     {
-        g_pLog->info("LuaDownload: Starting download for appid=%s\n", appId.c_str());
+        LOG_INFO("LuaDownload: Starting download for appid=%s\n", appId.c_str());
         pushStatus(appId, "Checking APIs...");
 
         // Find Steam root
         std::string steamRoot = findSteamRoot();
         if (steamRoot.empty())
         {
-            g_pLog->info("LuaDownload: Could not find Steam installation\n");
+            LOG_INFO("LuaDownload: Could not find Steam installation\n");
             pushStatus(appId, "Steam not found", "hue-rotate(0deg) brightness(1.0)");
             return false;
         }
-        g_pLog->debug("LuaDownload: Steam root: %s\n", steamRoot.c_str());
+        LOG_DEBUG("LuaDownload: Steam root: %s\n", steamRoot.c_str());
 
         // Prepare paths
         std::string stplugDir = steamRoot + "/config/stplug-in";
@@ -334,7 +334,7 @@ namespace LuaDownload
         std::string existingLua = stplugDir + "/" + appId + ".lua";
         if (std::filesystem::exists(existingLua))
         {
-            g_pLog->info("LuaDownload: Lua script already exists for appid=%s, skipping\n", appId.c_str());
+            LOG_INFO("LuaDownload: Lua script already exists for appid=%s, skipping\n", appId.c_str());
             pushStatus(appId, "Already installed", "hue-rotate(110deg) brightness(1.2)");
             return true;
         }
@@ -352,7 +352,7 @@ namespace LuaDownload
         // Check if zip is already cached
         if (std::filesystem::exists(zipPath) && isValidZip(zipPath))
         {
-            g_pLog->info("LuaDownload: Found cached zip for appid=%s\n", appId.c_str());
+            LOG_INFO("LuaDownload: Found cached zip for appid=%s\n", appId.c_str());
             downloaded = true;
             successApi = "Cache";
         }
@@ -372,7 +372,7 @@ namespace LuaDownload
                 size_t steamidPos = url.find("<steamid>");
                 if (steamidPos != std::string::npos)
                 {
-                    url.replace(steamidPos, 9, std::to_string(g_currentSteamId));
+                    url.replace(steamidPos, 9, std::to_string(g_currentSteamId.steamId64));
                 }
 
                 std::string authHeader;
@@ -386,33 +386,33 @@ namespace LuaDownload
                     url += g_config.ryuuKey.get();
                 }
 
-                g_pLog->info("LuaDownload: Trying API '%s' -> %s\n", api.name, url.c_str());
+                LOG_INFO("LuaDownload: Trying API '%s' -> %s\n", api.name, url.c_str());
                 pushStatus(appId, std::string("Trying ") + api.name + "...");
 
                 // Download
                 int httpCode = downloadToFile(url, zipPath, api.name, authHeader);
-                g_pLog->debug("LuaDownload: API '%s' returned HTTP %d\n", api.name, httpCode);
+                LOG_DEBUG("LuaDownload: API '%s' returned HTTP %d\n", api.name, httpCode);
 
                 // Steam browser fallback for Ryuu when curl fails (e.g. Cloudflare blocks direct requests)
                 if (std::string(api.name) == "Ryuu (API Key)" && httpCode != api.successCode)
                 {
-                    g_pLog->info("LuaDownload: Ryuu curl failed (HTTP %d), trying Steam browser fallback...\n", httpCode);
+                    LOG_INFO("LuaDownload: Ryuu curl failed (HTTP %d), trying Steam browser fallback...\n", httpCode);
                     pushStatus(appId, std::string("Trying ") + api.name + " (browser)...");
                     std::filesystem::remove(zipPath); // Remove any partial/invalid file from curl
                     httpCode = CDPInject::downloadViaPage(url, zipPath);
-                    g_pLog->debug("LuaDownload: Ryuu browser fallback returned HTTP %d\n", httpCode);
+                    LOG_DEBUG("LuaDownload: Ryuu browser fallback returned HTTP %d\n", httpCode);
                 }
 
                 if (httpCode == api.unavailableCode)
                 {
-                    g_pLog->debug("LuaDownload: API '%s' - not available (HTTP %d)\n", api.name, httpCode);
+                    LOG_DEBUG("LuaDownload: API '%s' - not available (HTTP %d)\n", api.name, httpCode);
                     std::filesystem::remove(zipPath);
                     continue;
                 }
 
                 if (httpCode != api.successCode)
                 {
-                    g_pLog->debug("LuaDownload: API '%s' - unexpected status %d\n", api.name, httpCode);
+                    LOG_DEBUG("LuaDownload: API '%s' - unexpected status %d\n", api.name, httpCode);
                     std::filesystem::remove(zipPath);
                     continue;
                 }
@@ -420,21 +420,21 @@ namespace LuaDownload
                 // Validate zip
                 if (!isValidZip(zipPath))
                 {
-                    g_pLog->info("LuaDownload: API '%s' returned non-zip file\n", api.name);
+                    LOG_INFO("LuaDownload: API '%s' returned non-zip file\n", api.name);
                     std::filesystem::remove(zipPath);
                     continue;
                 }
 
                 downloaded = true;
                 successApi = api.name;
-                g_pLog->info("LuaDownload: Downloaded zip from '%s' for appid=%s\n", api.name, appId.c_str());
+                LOG_INFO("LuaDownload: Downloaded zip from '%s' for appid=%s\n", api.name, appId.c_str());
                 break;
             }
         }
 
         if (!downloaded)
         {
-            g_pLog->info("LuaDownload: No API had the game for appid=%s\n", appId.c_str());
+            LOG_INFO("LuaDownload: No API had the game for appid=%s\n", appId.c_str());
             pushStatus(appId, "Not available", "hue-rotate(0deg) brightness(1.0)");
             return false;
         }
@@ -449,7 +449,7 @@ namespace LuaDownload
         pushStatus(appId, "Extracting...");
         if (!extractZip(zipPath, extractDir))
         {
-            g_pLog->info("LuaDownload: Failed to extract zip for appid=%s\n", appId.c_str());
+            LOG_INFO("LuaDownload: Failed to extract zip for appid=%s\n", appId.c_str());
             pushStatus(appId, "Extract failed", "hue-rotate(0deg) brightness(1.0)");
             std::filesystem::remove(zipPath);
             return false;
@@ -460,13 +460,13 @@ namespace LuaDownload
 
         if (files.luaFile.empty())
         {
-            g_pLog->info("LuaDownload: No %s.lua found in the zip\n", appId.c_str());
+            LOG_INFO("LuaDownload: No %s.lua found in the zip\n", appId.c_str());
             std::filesystem::remove_all(extractDir);
             std::filesystem::remove(zipPath);
             return false;
         }
 
-        g_pLog->info("LuaDownload: Found lua: %s, manifests: %zu\n",
+        LOG_INFO("LuaDownload: Found lua: %s, manifests: %zu\n",
                       files.luaFile.c_str(), files.manifestFiles.size());
 
         pushStatus(appId, "Installing...");
@@ -481,11 +481,11 @@ namespace LuaDownload
             {
                 std::filesystem::copy_file(manifestPath, destPath,
                     std::filesystem::copy_options::overwrite_existing);
-                g_pLog->info("LuaDownload: Installed manifest -> %s\n", destPath.c_str());
+                LOG_INFO("LuaDownload: Installed manifest -> %s\n", destPath.c_str());
             }
             catch (const std::exception& e)
             {
-                g_pLog->info("LuaDownload: Failed to copy manifest %s: %s\n",
+                LOG_INFO("LuaDownload: Failed to copy manifest %s: %s\n",
                              filename.c_str(), e.what());
             }
         }
@@ -497,19 +497,19 @@ namespace LuaDownload
         }
         catch (const std::exception& e)
         {
-            g_pLog->info("LuaDownload: Failed to copy lua file %s: %s\n", files.luaFile.c_str(), e.what());
+            LOG_INFO("LuaDownload: Failed to copy lua file %s: %s\n", files.luaFile.c_str(), e.what());
             std::filesystem::remove_all(extractDir);
             std::filesystem::remove(zipPath);
             return false;
         }
 
-        g_pLog->info("LuaDownload: Installed lua -> %s (via %s)\n",
+        LOG_INFO("LuaDownload: Installed lua -> %s (via %s)\n",
                       existingLua.c_str(), successApi.c_str());
 
         // Clean up extracted files, but keep the zip cached
         std::filesystem::remove_all(extractDir);
 
-        g_pLog->info("LuaDownload: Successfully installed appid=%s\n", appId.c_str());
+        LOG_INFO("LuaDownload: Successfully installed appid=%s\n", appId.c_str());
         pushStatus(appId, "Installed!", "hue-rotate(110deg) brightness(1.2)");
         return true;
     }

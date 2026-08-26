@@ -3,4 +3,5 @@
 .github
 bin
 obj*
+releases
 zip

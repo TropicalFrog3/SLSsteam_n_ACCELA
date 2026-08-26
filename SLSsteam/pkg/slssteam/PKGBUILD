@@ -1,6 +1,6 @@
 # Maintainer: Ace! _SL/S <acesls@protonmail.com>
 pkgname="slssteam"
-pkgver=20260429110636
+pkgver=20260819131545
 pkgrel=1
 pkgdesc="Steamclient Mod"
 arch=("i686" "x86_64")
@@ -26,12 +26,12 @@ makedepends=("gcc"
 #Disable stripping to not mess up disturb ticket-grabber
 options=(!strip)
 
-sha256sums=('06e85c0f6156d37ebb84c8105449f62f8accdee7da9ee58f6d47a09bad0636e9')
+sha256sums=('342d8d01e134481a8878dcd21c557d90758c79e4f555a4828cc68dd3cbc5b201')
 validpgpkeys=("63AB8F4BF8A62EEEB8D8C7584410F8CF7129B2D6")
 
 build() {
 	cd "$srcdir/SLSsteam-$pkgver"
-	make
+	make build
 }
 
 package() {
@@ -45,4 +45,5 @@ package() {
 
 	#Disabled until dev reaches main
 	install -D "$srcdir/SLSsteam-$pkgver/tools/ticket-grabber/bin/Release/net9.0/linux-x64/publish/ticket-grabber" "$pkgdir/usr/bin/sls-ticket-grabber"
+	install -D "$srcdir/SLSsteam-$pkgver/tools/schema-grabber/bin/Release/net9.0/linux-x64/publish/schema-grabber" "$pkgdir/usr/bin/sls-schema-grabber"
 }

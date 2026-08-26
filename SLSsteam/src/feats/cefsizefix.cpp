@@ -218,17 +218,17 @@ bool CefSizeFix::injectSizeFixScript()
     auto indexPath = findSteamUIIndexHtml();
     if (indexPath.empty())
     {
-        g_pLog->warn("CefSizeFix: Could not find steamui/index.html\n");
+        LOG_WARN("CefSizeFix: Could not find steamui/index.html\n");
         return false;
     }
 
-    g_pLog->info("CefSizeFix: Found steamui/index.html at %s\n", indexPath.string().c_str());
+    LOG_INFO("CefSizeFix: Found steamui/index.html at %s\n", indexPath.string().c_str());
 
     // Read the current content
     std::ifstream inFile(indexPath);
     if (!inFile.is_open())
     {
-        g_pLog->warn("CefSizeFix: Could not open %s for reading\n", indexPath.string().c_str());
+        LOG_WARN("CefSizeFix: Could not open %s for reading\n", indexPath.string().c_str());
         return false;
     }
 
@@ -240,7 +240,7 @@ bool CefSizeFix::injectSizeFixScript()
     // Check if already injected
     if (content.find(INJECT_MARKER_BEGIN) != std::string::npos)
     {
-        g_pLog->info("CefSizeFix: Script already injected, skipping\n");
+        LOG_INFO("CefSizeFix: Script already injected, skipping\n");
         return true;
     }
 
@@ -255,7 +255,7 @@ bool CefSizeFix::injectSizeFixScript()
     auto headEnd = content.find("</head>");
     if (headEnd == std::string::npos)
     {
-        g_pLog->warn("CefSizeFix: Could not find </head> in index.html\n");
+        LOG_WARN("CefSizeFix: Could not find </head> in index.html\n");
         return false;
     }
 
@@ -265,14 +265,14 @@ bool CefSizeFix::injectSizeFixScript()
     std::ofstream outFile(indexPath, std::ios::trunc);
     if (!outFile.is_open())
     {
-        g_pLog->warn("CefSizeFix: Could not open %s for writing\n", indexPath.string().c_str());
+        LOG_WARN("CefSizeFix: Could not open %s for writing\n", indexPath.string().c_str());
         return false;
     }
 
     outFile << content;
     outFile.close();
 
-    g_pLog->info("CefSizeFix: Successfully injected size fix script into index.html\n");
+    LOG_INFO("CefSizeFix: Successfully injected size fix script into index.html\n");
     return true;
 }
 
@@ -311,5 +311,5 @@ void CefSizeFix::removeSizeFixScript()
     outFile << content;
     outFile.close();
 
-    g_pLog->info("CefSizeFix: Removed injected script from index.html\n");
+    LOG_INFO("CefSizeFix: Removed injected script from index.html\n");
 }

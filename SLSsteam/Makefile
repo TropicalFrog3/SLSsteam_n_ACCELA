@@ -6,17 +6,28 @@ CXX := g++
 
 libs := $(wildcard lib/*.a)
 srcs := $(shell find src/ -type f -iname "*.cpp")
-objs := $(srcs:src/%.cpp=obj/%.o)
-deps := $(objs:%.o=%.d)
 
 CXXFLAGS := -O3 -flto=auto -fPIC -m32 -std=c++20 -Wall -Wextra -Wpedantic -Wno-error=format-security -D_GLIBCXX_USE_CXX11_ABI=0
+CXXFLAGS += -floop-block -fgraphite-identity -floop-parallelize-all -pipe -fopenmp -fomit-frame-pointer
 
 LDFLAGS := -shared -Wl,--no-undefined
 LDFLAGS += $(shell pkg-config --libs "openssl")
 LDFLAGS += $(shell pkg-config --libs "libcurl")
 
+JOBS := $(shell nproc)
+
 #DATE := $(shell date "+%Y%m%d%H%M%S")
 DATE := $(shell grep '^Version:' res/version | cut -d' ' -f2 | xargs)
+
+ifeq ($(shell echo $$TRACE),1)
+	CXXFLAGS += -D "TRACE"
+endif
+
+ifeq ($(shell echo $$DEBUG),1)
+	CXXFLAGS += -D "DEBUG"
+else
+	CXXFLAGS += -Wno-unused-parameter -Wno-unused-variable
+endif
 
 ifeq ($(shell echo $$NATIVE),1)
 	CXXFLAGS += -march=native
@@ -30,44 +41,76 @@ ifeq ($(shell type mold &> /dev/null && echo "found"),found)
 	LDFLAGS += -fuse-ld=mold
 endif
 
-audit-libs: bin/SLSsteam.so bin/library-inject.so tools/ticket-grabber/bin/Release/net9.0/linux-x64/publish/ticket-grabber
+FLAGSSHA := $(shell echo "$(CXXFLAGS) & $(LDFLAGS)" | sha256sum | cut -d " " -f 1)
+SLSSTEAMSO := bin/SLSsteam-$(FLAGSSHA).so
+objs := $(srcs:src/%.cpp=obj/$(FLAGSSHA)/%.o)
+deps := $(objs:%.o=%.d)
 
-bin/SLSsteam.so: $(objs) $(libs)
+audit-libs:
+	$(MAKE) -j $(JOBS) $(SLSSTEAMSO) bin/library-inject.so
+	$(MAKE) link-bins
+
+tools:
+	$(MAKE) -j 2 schema-grabber ticket-grabber
+
+link-bins:
+	-test -f "$(SLSSTEAMSO)" && ln -f "$(SLSSTEAMSO)" "bin/SLSsteam.so"
+	-test -f "tools/library-inject/library-inject.so" && ln -f "tools/library-inject/library-inject.so" "bin/library-inject.so"
+
+$(SLSSTEAMSO): $(objs) $(libs)
 	@mkdir -p bin
-	$(CXX) $(CXXFLAGS) $^ -o bin/SLSsteam.so $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) $^ -o $(SLSSTEAMSO) $(LDFLAGS)
+	$(MAKE) link-bins
 
-bin/library-inject.so: tools/library-inject/main.cpp tools/library-inject/build.sh
-	sh tools/library-inject/build.sh
+bin/library-inject.so:
 	@mkdir -p bin
-	cp tools/library-inject/library-inject.so bin/library-inject.so
+	$(MAKE) -C tools/library-inject
+	$(MAKE) link-bins
 
-tools/ticket-grabber/bin/Release/net9.0/linux-x64/publish/ticket-grabber:
-	sh tools/ticket-grabber/build.sh
+schema-grabber:
+	$(MAKE) -C tools/schema-grabber
+
+ticket-grabber:
+	$(MAKE) -C tools/ticket-grabber
 
 -include $(deps)
-obj/update.o: src/update.cpp res/version
+obj/$(FLAGSSHA)/update.o: src/update.cpp res/version
 	$(shell ./embed-version.sh)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -isysteminclude -MMD -MP -c $< -o $@
 
 -include $(deps)
-obj/config.o: src/config.cpp res/config.yaml
+obj/$(FLAGSSHA)/config.o: src/config.cpp res/config.yaml
 	$(shell ./embed-config.sh)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -isysteminclude -MMD -MP -c $< -o $@
 
 -include $(deps)
-obj/%.o : src/%.cpp
+obj/$(FLAGSSHA)/%.o : src/%.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -isysteminclude -MMD -MP -c $< -o $@
 
-clean:
-	rm -rvf "obj/" "bin/" "zips/" "tools/ticket-grabber/bin"
+clean-libs:
+	rm -rvf \
+		"obj/" \
+		"bin/" \
+		"zips/" \
+		"tools/ticket-grabber/bin" \
+		"tools/ticket-grabber/obj" \
+		"tools/schema-grabber/bin" \
+		"tools/schema-grabber/obj"
+
+clean-tools:
+	-$(MAKE) -C tools/schema-grabber clean
+	-$(MAKE) -C tools/ticket-grabber clean
 
 install:
-	sh setup.sh
+	sh setup.sh install
 
-zips: rebuild
+uninstall:
+	sh setup.sh uninstall
+
+zips: build
 	@mkdir -p zips
 	7z a -mx9 -m9=lzma2 \
 		"zips/SLSsteam $(DATE).7z" \
@@ -76,8 +119,8 @@ zips: rebuild
 		"setup.sh" \
 		"docs/LICENSE" \
 		"res/config.yaml" \
-		"tools/SLScheevo" \
-		"tools/ticket-grabber/bin/Release/net9.0/linux-x64/publish/ticket-grabber"
+		"tools/ticket-grabber/bin/Release/net9.0/linux-x64/publish/ticket-grabber" \
+		"tools/schema-grabber/bin/Release/net9.0/linux-x64/publish/schema-grabber"
 
 	#Compatibility for Github issues
 	7z a -mx9 -m9=lzma \
@@ -87,17 +130,33 @@ zips: rebuild
 		"setup.sh" \
 		"docs/LICENSE" \
 		"res/config.yaml" \
-		"tools/SLScheevo" \
-		"tools/ticket-grabber/bin/Release/net9.0/linux-x64/publish/ticket-grabber"
+		"tools/ticket-grabber/bin/Release/net9.0/linux-x64/publish/ticket-grabber" \
+		"tools/schema-grabber/bin/Release/net9.0/linux-x64/publish/schema-grabber"
 
 zips-config:
 	7z a -mx9 -m9=lzma "zips/SLSsteam - SLSConfig $(DATE).zip" "$(HOME)/.config/SLSsteam/config.yaml"
 	#Compatibility for Github issues
 	7z a -mx9 -m9=lzma2 "zips/SLSsteam - SLSConfig $(DATE).7z" "$(HOME)/.config/SLSsteam/config.yaml"
 
-build: audit-libs
-rebuild: clean build
-all: clean build zips
 
-.PHONY: all build clean rebuild zips
-.NOTPARALLEL: clean rebuild zips
+clean: clean-libs clean-tools
+build: audit-libs tools
+rebuild: clean build
+release: rebuild zips
+
+.PHONY: \
+	audit-libs \
+	tools \
+	link-bins \
+	schema-grabber \
+	ticket-grabber \
+	clean-libs \
+	clean-tools \
+	install \
+	uninstall \
+	zips \
+	zips-config \
+	clean \
+	build \
+	rebuild \
+	release

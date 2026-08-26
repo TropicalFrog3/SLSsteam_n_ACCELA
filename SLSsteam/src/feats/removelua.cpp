@@ -46,14 +46,14 @@ namespace RemoveLua
         for (const auto& path : paths) {
             std::ifstream file(path, std::ios::binary);
             if (file.is_open()) {
-                g_pLog->info("CDPInject::loadResourceFile: Successfully loaded %s from %s\n", filename.c_str(), path.c_str());
+                LOG_INFO("CDPInject::loadResourceFile: Successfully loaded %s from %s\n", filename.c_str(), path.c_str());
                 std::stringstream buffer;
                 buffer << file.rdbuf();
                 return buffer.str();
             }
         }
 
-        g_pLog->info("CDPInject::loadResourceFile: Could not find %s in any candidate path!\n", filename.c_str());
+        LOG_INFO("CDPInject::loadResourceFile: Could not find %s in any candidate path!\n", filename.c_str());
         return "";
     }
 
@@ -95,7 +95,7 @@ namespace RemoveLua
         {
             cachedAppDetailsScript = loadResourceFile("app-details-script.js");
             if (cachedAppDetailsScript.empty()) {
-                g_pLog->debug("Failed to load app-details-script.js");
+                LOG_DEBUG("Failed to load app-details-script.js");
                 return false;
             }
         }
@@ -104,7 +104,7 @@ namespace RemoveLua
         {
             cachedImportLuaScript = loadResourceFile("import-lua-script.js");
             if (cachedImportLuaScript.empty()) {
-                g_pLog->debug("Failed to load import-lua-script.js");
+                LOG_DEBUG("Failed to load import-lua-script.js");
                 return false;
             }
         }

@@ -365,21 +365,21 @@ namespace CDPInject
 
         if (!parseWsUrl(wsUrl, host, port, path))
         {
-            g_pLog->info("CDPInject: Failed to parse WS URL: %s\n", wsUrl.c_str());
+            LOG_INFO("CDPInject: Failed to parse WS URL: %s\n", wsUrl.c_str());
             return false;
         }
 
         int sock = tcpConnect(host.c_str(), port);
         if (sock < 0)
         {
-            g_pLog->info("CDPInject: Failed to connect to %s:%d\n", host.c_str(), port);
+            LOG_INFO("CDPInject: Failed to connect to %s:%d\n", host.c_str(), port);
             return false;
         }
 
         std::string wsKey = generateWsKey();
         if (!wsHandshake(sock, host, port, path, wsKey))
         {
-            g_pLog->info("CDPInject: WebSocket handshake failed for %s\n", wsUrl.c_str());
+            LOG_INFO("CDPInject: WebSocket handshake failed for %s\n", wsUrl.c_str());
             close(sock);
             return false;
         }
@@ -405,7 +405,7 @@ namespace CDPInject
 
         if (!wsSendText(sock, cdpPayload))
         {
-            g_pLog->info("CDPInject: Failed to send CDP payload to %s\n", wsUrl.c_str());
+            LOG_INFO("CDPInject: Failed to send CDP payload to %s\n", wsUrl.c_str());
             close(sock);
             return false;
         }
@@ -414,7 +414,7 @@ namespace CDPInject
         std::string response = wsRecvFrame(sock);
         (void)response;
 
-        g_pLog->info("CDPInject: Successfully injected JS into target WebSocket: %s\n", wsUrl.c_str());
+        LOG_INFO("CDPInject: Successfully injected JS into target WebSocket: %s\n", wsUrl.c_str());
 
         close(sock);
         return true;
@@ -447,11 +447,11 @@ namespace CDPInject
         int port = dist(gen);
         std::string portArg = "--remote-debugging-port=" + std::to_string(port);
 
-        g_pLog->info("CDPInject::downloadViaPage: Spawning headless browser proxy on port %d\n", port);
+        LOG_INFO("CDPInject::downloadViaPage: Spawning headless browser proxy on port %d\n", port);
 
         pid_t pid = fork();
         if (pid < 0) {
-            g_pLog->info("CDPInject::downloadViaPage: fork failed\n");
+            LOG_INFO("CDPInject::downloadViaPage: fork failed\n");
             return -1;
         }
 
@@ -506,7 +506,7 @@ namespace CDPInject
         }
 
         if (pages.empty()) {
-            g_pLog->info("CDPInject::downloadViaPage: Failed to connect to headless proxy\n");
+            LOG_INFO("CDPInject::downloadViaPage: Failed to connect to headless proxy\n");
             kill(pid, SIGTERM);
             waitpid(pid, nullptr, 0);
             return -1;
@@ -594,26 +594,26 @@ namespace CDPInject
 
         std::string evalPayload = "{\"id\":11,\"method\":\"Runtime.evaluate\",\"params\":{\"expression\":\"" + escapedJs + "\",\"awaitPromise\":true,\"returnByValue\":true}}";
 
-        g_pLog->info("CDPInject::downloadViaPage: Fetching file...\n");
+        LOG_INFO("CDPInject::downloadViaPage: Fetching file...\n");
         std::string response = cdpSendAndRecv(sock, 11, evalPayload, 60);
 
         close(sock);
         kill(pid, SIGTERM);
         waitpid(pid, nullptr, 0);
 
-        if (response.empty()) { g_pLog->info("CDPInject::downloadViaPage: No response\n"); return -1; }
+        if (response.empty()) { LOG_INFO("CDPInject::downloadViaPage: No response\n"); return -1; }
 
         std::string value = jsonGetString(response, "value");
-        if (value.empty()) { g_pLog->info("CDPInject::downloadViaPage: Empty value: %.200s\n", response.c_str()); return -1; }
+        if (value.empty()) { LOG_INFO("CDPInject::downloadViaPage: Empty value: %.200s\n", response.c_str()); return -1; }
 
         if (value.rfind("ERR:", 0) == 0)
         {
             int errStatus = -1;
             try { errStatus = std::stoi(value.substr(4)); } catch (...) {}
-            g_pLog->info("CDPInject::downloadViaPage: %s\n", value.c_str());
+            LOG_INFO("CDPInject::downloadViaPage: %s\n", value.c_str());
             return errStatus;
         }
-        if (value.rfind("OK:", 0) != 0) { g_pLog->info("CDPInject::downloadViaPage: Unexpected: %.100s\n", value.c_str()); return -1; }
+        if (value.rfind("OK:", 0) != 0) { LOG_INFO("CDPInject::downloadViaPage: Unexpected: %.100s\n", value.c_str()); return -1; }
 
         size_t firstColon = value.find(':', 3);
         if (firstColon == std::string::npos) return -1;
@@ -622,15 +622,15 @@ namespace CDPInject
         try { httpStatus = std::stoi(value.substr(3, firstColon - 3)); } catch (...) {}
 
         std::string b64data = value.substr(firstColon + 1);
-        if (b64data.empty()) { g_pLog->info("CDPInject::downloadViaPage: Empty data (HTTP %d)\n", httpStatus); return httpStatus; }
+        if (b64data.empty()) { LOG_INFO("CDPInject::downloadViaPage: Empty data (HTTP %d)\n", httpStatus); return httpStatus; }
 
         std::string decoded = base64::from_base64(b64data);
         FILE* fp = fopen(destPath.c_str(), "wb");
-        if (!fp) { g_pLog->info("CDPInject::downloadViaPage: Cannot open %s\n", destPath.c_str()); return -1; }
+        if (!fp) { LOG_INFO("CDPInject::downloadViaPage: Cannot open %s\n", destPath.c_str()); return -1; }
         fwrite(decoded.data(), 1, decoded.size(), fp);
         fclose(fp);
 
-        g_pLog->info("CDPInject::downloadViaPage: Downloaded %zu bytes (HTTP %d) -> %s\n",
+        LOG_INFO("CDPInject::downloadViaPage: Downloaded %zu bytes (HTTP %d) -> %s\n",
                      decoded.size(), httpStatus, destPath.c_str());
         return httpStatus;
     }
@@ -670,14 +670,14 @@ namespace CDPInject
         for (const auto& path : paths) {
             std::ifstream file(path, std::ios::binary);
             if (file.is_open()) {
-                g_pLog->info("CDPInject::loadResourceFile: Successfully loaded %s from %s\n", filename.c_str(), path.c_str());
+                LOG_INFO("CDPInject::loadResourceFile: Successfully loaded %s from %s\n", filename.c_str(), path.c_str());
                 std::stringstream buffer;
                 buffer << file.rdbuf();
                 return buffer.str();
             }
         }
 
-        g_pLog->info("CDPInject::loadResourceFile: Could not find %s in any candidate path!\n", filename.c_str());
+        LOG_INFO("CDPInject::loadResourceFile: Could not find %s in any candidate path!\n", filename.c_str());
         return "";
     }
 
@@ -689,7 +689,7 @@ namespace CDPInject
 
         if (!parseWsUrl(wsUrl, host, port, path))
         {
-            g_pLog->info("CDPInject: Failed to parse WS URL for check: %s\n", wsUrl.c_str());
+            LOG_INFO("CDPInject: Failed to parse WS URL for check: %s\n", wsUrl.c_str());
             return false;
         }
 
@@ -749,7 +749,7 @@ namespace CDPInject
         {
             std::string storePageScript = loadResourceFile("store-page-script.js");
             if (storePageScript.empty()) {
-                g_pLog->debug("CDPInject::injectStorePages: Failed to load store-page-script.js\n");
+                LOG_DEBUG("CDPInject::injectStorePages: Failed to load store-page-script.js\n");
                 return;
             }
 

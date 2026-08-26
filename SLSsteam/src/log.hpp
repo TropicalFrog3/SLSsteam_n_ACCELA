@@ -1,28 +1,48 @@
 #pragma once
 
-#include <cstddef>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
+#include <cstdarg>
+#include <cstdint>
 #include <fstream>
 #include <memory>
-#include <mutex>
-#include <openssl/sha.h>
 #include <shared_mutex>
-#include <sstream>
 #include <unordered_set>
 
-enum class LogLevel : unsigned int
+#define LOG_TRACE(fmt, ...) g_pLog->trace(__FILE__, __FUNCTION__, __LINE__, fmt __VA_OPT__(,) __VA_ARGS__)
+#define LOG_TRACE_ONCE(fmt, ...) g_pLog->traceOnce(__FILE__, __FUNCTION__, __LINE__, fmt __VA_OPT__(,) __VA_ARGS__)
+
+#define LOG_ONCE(fmt, ...) g_pLog->once(__FILE__, __FUNCTION__, __LINE__, fmt __VA_OPT__(,) __VA_ARGS__)
+
+#define LOG_DEBUG(fmt, ...) g_pLog->debug(__FILE__, __FUNCTION__, __LINE__, fmt __VA_OPT__(,) __VA_ARGS__)
+#define LOG_DEBUG_ONCE(fmt, ...) g_pLog->debugOnce(__FILE__, __FUNCTION__, __LINE__, fmt __VA_OPT__(,) __VA_ARGS__)
+
+#define LOG_WARN(fmt, ...) g_pLog->warn(__FILE__, __FUNCTION__, __LINE__, fmt __VA_OPT__(,) __VA_ARGS__)
+#define LOG_ERROR(fmt, ...) g_pLog->error(__FILE__, __FUNCTION__, __LINE__, fmt __VA_OPT__(,) __VA_ARGS__)
+#define LOG_INFO(fmt, ...) g_pLog->info(__FILE__, __FUNCTION__, __LINE__, fmt __VA_OPT__(,) __VA_ARGS__)
+#define LOG_NOTIFY(fmt, ...) g_pLog->notify(__FILE__, __FUNCTION__, __LINE__, fmt __VA_OPT__(,) __VA_ARGS__)
+#define LOG_NOTIFYLONG(fmt, ...) g_pLog->notifyLong(__FILE__, __FUNCTION__, __LINE__, fmt __VA_OPT__(,) __VA_ARGS__)
+#define LOG_NOTIFYWARN(fmt, ...) g_pLog->notifyWarn(__FILE__, __FUNCTION__, __LINE__, fmt __VA_OPT__(,) __VA_ARGS__)
+#define LOG_NOTIFYERROR(fmt, ...) g_pLog->notifyError(__FILE__, __FUNCTION__, __LINE__, fmt __VA_OPT__(,) __VA_ARGS__)
+#define LOG_API(fmt, ...) g_pLog->api(__FILE__, __FUNCTION__, __LINE__, fmt __VA_OPT__(,) __VA_ARGS__)
+
+#define LOG_CUSTOM(lvl, fmt, ...) g_pLog->custom(lvl, __FILE__, __FUNCTION__, __LINE__, fmt __VA_OPT__(,) __VA_ARGS__)
+
+constexpr unsigned int ELogLevelCount = 9;
+
+enum ELogLevel : uint32_t
 {
-	//TODO: Add Trace without breaking configs and without using -1 for Once
-	Once,
-	Debug,
-	Info,
-	NotifyShort,
-	NotifyLong,
-	Warn,
-	None
+	k_ELogLevelTrace = 1 << 0, //Tracing for debug
+	k_ELogLevelOnce = 1 << 1, //Only log once
+	k_ELogLevelDebug = 1 << 2, //Debugging statements
+	k_ELogLevelWarn = 1 << 3, //Something went wrong but it's not terrible
+	k_ELogLevelError = 1 << 4, //Something went wrong and it's terrible/can't be recovered from. Function failed
+	k_ELogLevelInfo = 1 << 5, //Log for users/external tools
+	k_ELogLevelNotifyShort = 1 << 6,
+	k_ELogLevelNotifyLong = 1 << 7,
+
+	k_ELogLevelAPI = 1 << 8 //Used by API. Not togglable via config, gets set by API yes/no
 };
+
+std::string ELogLevel_ToString(unsigned int lvlFlags);
 
 class CLog
 {
@@ -30,93 +50,9 @@ class CLog
 	std::unordered_set<std::string> msgHist {};
 	std::shared_mutex mutex;
 
-	constexpr const char* logLvlToStr(LogLevel& lvl)
-	{
-		switch(lvl)
-		{
-			case LogLevel::Once:
-				return "Once";
-			case LogLevel::Debug:
-				return "Debug";
-			case LogLevel::Info:
-				return "Info";
-			case LogLevel::NotifyShort:
-			case LogLevel::NotifyLong:
-				return "Notify";
-			case LogLevel::Warn:
-				return "Warn";
-
-			//Shut gcc warning up
-			default:
-				return "Unknown";
-		}
-	}
-
-	template<typename ...Args>
-	__attribute__((hot))
-	void __log(LogLevel lvl, const char* msg, Args... args)
-	{
-		if (lvl < getMinLevel())
-		{
-			return;
-		}
-
-		size_t size = snprintf(nullptr, 0, msg, args...) + 1; //Allocate one more byte for zero termination
-		std::string formatted;
-		formatted.resize(size);
-		snprintf(formatted.data(), size, msg, args...);
-
-		std::stringstream notifySS;
-
-		switch(lvl)
-		{
-			//TODO: Fix possible breakage when there's only one " in formatted
-			case LogLevel::NotifyShort:
-				notifySS << "notify-send -t 10000 -u \"normal\" \"SLSsteam\" \"" << formatted.c_str() << "\"";
-				break;
-			case LogLevel::NotifyLong:
-				notifySS << "notify-send -t 30000 -u \"normal\" \"SLSsteam\" \"" << formatted.c_str() << "\"";
-				break;
-			case LogLevel::Warn:
-				notifySS << "notify-send -u \"critical\" \"SLSsteam\" \"" << formatted.c_str() << "\"";
-				break;
-
-			default:
-				break;
-
-		}
-
-		if (shouldNotify() && notifySS.str().size() > 0)
-		{
-			ofstream << "\n";
-
-			system(notifySS.str().c_str());
-			debug("system(\"%s\")\n", notifySS.str().c_str());
-		}
-
-		const auto lock = std::unique_lock(mutex);
-
-		if (lvl == LogLevel::Once)
-		{
-			for(const auto& oldMsg : msgHist)
-			{
-				if (oldMsg == formatted)
-				{
-					return;
-				}
-			}
-
-			msgHist.emplace(formatted);
-		}
-
-		ofstream << "[" << logLvlToStr(lvl) << "] " << formatted.c_str();
-		if (lvl == LogLevel::NotifyShort || lvl == LogLevel::NotifyLong)
-		{
-			ofstream << "\n";
-		}
-
-		ofstream.flush();
-	}
+	bool shouldNotify(const unsigned int flags);
+	std::string buildNotification(const unsigned int flags, const char* msg);
+	void __log(const unsigned int flags, const char* file, const char* function, const int line, const char* msg, const va_list& vArgs);
 
 public:
 	std::string path;
@@ -124,45 +60,36 @@ public:
 	CLog(const char* path);
 	~CLog();
 
-	template<typename ...Args>
-	constexpr void once(const char* msg, Args... args)
-	{
-		__log(LogLevel::Once, msg, args...);
-	}
-
-	template<typename ...Args>
-	constexpr void debug(const char* msg, Args... args)
-	{
-		__log(LogLevel::Debug, msg, args...);
-	}
-
-	template<typename ...Args>
-	constexpr void info(const char* msg, Args... args)
-	{
-		__log(LogLevel::Info, msg, args...);
-	}
-
-	template<typename ...Args>
-	constexpr void notify(const char* msg, Args... args)
-	{
-		__log(LogLevel::NotifyShort, msg, args...);
-	}
-
-	template<typename ...Args>
-	constexpr void notifyLong(const char* msg, Args... args)
-	{
-		__log(LogLevel::NotifyLong, msg, args...);
-	}
-
-	template<typename ...Args>
-	constexpr void warn(const char* msg, Args... args)
-	{
-		__log(LogLevel::Warn, msg, args...);
-	}
-
 	//Do not include config.hpp in this header, otherwise things will break :) (proly due to recursive inclusion)
-	static LogLevel getMinLevel();
-	static bool shouldNotify();
+	__attribute__((__format__(__printf__, 5, 6)))
+	void trace(const char* file, const char* function, const int line, const char* msg, ...);
+	__attribute__((__format__(__printf__, 5, 6)))
+	void traceOnce(const char* file, const char* function, const int line, const char* msg, ...);
+	__attribute__((__format__(__printf__, 5, 6)))
+	void once(const char* file, const char* function, const int line, const char* msg, ...);
+	__attribute__((__format__(__printf__, 5, 6)))
+	void debug(const char* file, const char* function, const int line, const char* msg, ...);
+	__attribute__((__format__(__printf__, 5, 6)))
+	void debugOnce(const char* file, const char* function, const int line, const char* msg, ...);
+	__attribute__((__format__(__printf__, 5, 6)))
+	void warn(const char* file, const char* function, const int line, const char* msg, ...);
+	__attribute__((__format__(__printf__, 5, 6)))
+	void error(const char* file, const char* function, const int line, const char* msg, ...);
+	__attribute__((__format__(__printf__, 5, 6)))
+	void info(const char* file, const char* function, const int line, const char* msg, ...);
+	__attribute__((__format__(__printf__, 5, 6)))
+	void notify(const char* file, const char* function, const int line, const char* msg, ...);
+	__attribute__((__format__(__printf__, 5, 6)))
+	void notifyLong(const char* file, const char* function, const int line, const char* msg, ...);
+	__attribute__((__format__(__printf__, 5, 6)))
+	void notifyWarn(const char* file, const char* function, const int line, const char* msg, ...);
+	__attribute__((__format__(__printf__, 5, 6)))
+	void notifyError(const char* file, const char* function, const int line, const char* msg, ...);
+	__attribute__((__format__(__printf__, 5, 6)))
+	void api(const char* file, const char* function, const int line, const char* msg, ...);
+	__attribute__((__format__(__printf__, 6, 7)))
+	void custom(const unsigned int flags, const char* file, const char* function, const int line, const char* msg, ...);
+
 	static CLog* createDefaultLog();
 };
 

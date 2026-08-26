@@ -1,10 +1,11 @@
 #pragma once
 
+#include "../sdk/sdk.hpp"
 class CProtoBufMsgBase;
 
 namespace Misc
 {
 	bool shouldFakeOffline();
-	void recvMsg(CProtoBufMsgBase* msg);
-	void sendMsg(CProtoBufMsgBase* msg);
+	void recvMsg(CNetPacket* pkt);
+	void sendMsg(CNetPacket* pkt);
 }

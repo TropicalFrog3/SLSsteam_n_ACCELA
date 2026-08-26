@@ -1,5 +1,8 @@
+#include "sdk/sdk.hpp"
+
 #include "api.hpp"
 #include "config.hpp"
+#include "decompiler.hpp"
 #include "globals.hpp"
 #include "hooks.hpp"
 #include "log.hpp"
@@ -13,6 +16,7 @@
 #include "feats/removelua.hpp"
 #include "feats/tier0hook.hpp"
 #include "feats/autoupdate.hpp"
+#include "vftableinfo.hpp"
 
 #include "libmem/libmem.h"
 #include <curl/curl.h>
@@ -37,26 +41,26 @@ static bool cleanEnvVar(const char* varName, const char* endsWith)
 	if (var == NULL)
 		return false;
 
-	auto splits = Utils::strsplit(var, ":");
+	const auto splits = Utils::strsplit(var, ":");
 	auto newEnv = std::string();
 
-	for(unsigned int i = 0; i < splits.size(); i++)
+	for (unsigned int i = 0; i < splits.size(); i++)
 	{
-		auto split = splits.at(i);
+		const auto split = splits.at(i);
 		if (split.ends_with(endsWith))
 		{
-			g_pLog->debug("Removed %s from $%s\n", endsWith, varName);
+			LOG_DEBUG("Removed %s from $%s\n", endsWith, varName);
 			continue;
 		}
 
-		if(newEnv.size() > 0)
+		if (newEnv.size() > 0)
 		{
 			newEnv.append(":");
 		}
 		newEnv.append(split);
 	}
 
-	if(newEnv.size())
+	if (newEnv.size())
 	{
 		setenv(varName, newEnv.c_str(), true);
 	}
@@ -64,7 +68,7 @@ static bool cleanEnvVar(const char* varName, const char* endsWith)
 	{
 		unsetenv(varName);
 	}
-	//g_pLog->debug("Set %s to %s\n", varName, newEnv.c_str());
+	//LOG_DEBUG("Set %s to %s\n", varName, newEnv.c_str());
 
 	return true;
 }
@@ -78,6 +82,7 @@ static void unload()
 	StoreInject::shutdown();
 	Hooks::remove();
 	curl_global_cleanup();
+	//Hooks::remove();
 
 	//This is absolutely unnessecary for applications loading SLSsteam where it cancels from setup()
 	//Would be nice to run have for failed load() attempts though 
@@ -112,13 +117,15 @@ static void setup()
 
 	g_pLog = std::unique_ptr<CLog>(CLog::createDefaultLog());
 	curl_global_init(CURL_GLOBAL_ALL);
+	//Won't happen, log throws a runtime exception when creation fails.
+	//But just in case I decide to refactor one day
 	if (!g_pLog)
 	{
 		unload();
 		return;
 	}
 
-	g_pLog->debug("SLSsteam loading in %s\n", proc.name);
+	LOG_DEBUG("SLSsteam loading in %s\n", proc.name);
 
 	//Any release
 	cleanEnvVar("LD_AUDIT", "SLSsteam.so");
@@ -130,7 +137,7 @@ static void setup()
 	//TODO: Investigate weird logging. Not like it's necessary anymore
 	//cleanEnvVar("LD_PRELOAD");
 
-	if(!g_config.init())
+	if (!g_config.init())
 	{
 		unload();
 		return;
@@ -142,7 +149,11 @@ static void setup()
 	//Since we can't statically link everything and some distros seem to respect LD_LIBRARY_PATH
 	//more or less than mine does we just force append those
 	//Hopefully this won't mess anything else up
-	auto ldLibPath = std::string(getenv("LD_LIBRARY_PATH"));
+	const char* env_ldLibPath = getenv("LD_LIBRARY_PATH");
+	auto ldLibPath = std::string(env_ldLibPath ? env_ldLibPath : "");
+	if (!ldLibPath.empty()) {
+		ldLibPath.append(":");
+	}
 	ldLibPath.append("/usr/lib:/usr/lib32");
 	setenv("LD_LIBRARY_PATH", ldLibPath.c_str(), true);
 
@@ -159,54 +170,58 @@ static void load()
 		return;
 	}
 
-	//This should never happen, but better be safe than sorry in case I refactor someday
-	if (!LM_FindModule("steamclient.so", &g_modSteamClient))
+	if (!g_modSteamClient.base || !g_modSteamUI.base || !g_modTier0.base)
 	{
-		unload();
-		return;
-	}
-	if (!LM_FindModule("steamui.so", &g_modSteamUI))
-	{
-		unload();
 		return;
 	}
 
-	auto path = std::filesystem::path(g_modSteamClient.path);
-	auto dir = path.parent_path();
+	const auto path = std::filesystem::path(g_modSteamClient.path);
+	const auto dir = path.parent_path();
 
-	g_pLog->info
+	LOG_INFO
 	(
-		"steamclient.so loaded from %s/%s at %p to %p\n",
+		"steamclient.so loaded from %s/%s at 0x%x to 0x%x\n",
 		dir.filename().c_str(),
 		path.filename().c_str(),
 		g_modSteamClient.base,
 		g_modSteamClient.end
 	);
-	g_pLog->info
+	LOG_INFO
 	(
-		"steamui.so loaded at %p to %p\n",
+		"steamui.so loaded at 0x%x to 0x%x\n",
 		g_modSteamUI.base,
 		g_modSteamUI.end
 	);
-
 
 	if (!Updater::verifySafeModeHash())
 	{
 		if (g_config.safeMode.get())
 		{
-			g_pLog->warn("Unknown steamclient.so hash! Aborting...");
+			LOG_NOTIFYERROR("Unknown steamclient.so hash! Aborting...");
 			unload();
 			return;
 		}
 		else if (g_config.warnHashMissmatch.get())
 		{
-			g_pLog->warn("steamclient.so hash missmatch! Please update :)");
+			LOG_NOTIFYWARN("steamclient.so hash missmatch! Please update :)");
 		}
+	}
+
+	if (!Steam::init())
+	{
+		LOG_NOTIFYERROR("Failed to find steam exports!\n");
+		return;
+	}
+
+	if (!VFTIndexes::init())
+	{
+		LOG_NOTIFYERROR("Failed to parse VFTables! Aborting...");
+		return;
 	}
 
 	if (!Patterns::init())
 	{
-		g_pLog->warn("Failed to find all patterns! Aborting...");
+		LOG_NOTIFYERROR("Failed to find all patterns! Aborting...");
 		return;
 	}
 
@@ -216,16 +231,15 @@ static void load()
 		return;
 	}
 
-	Apps::init();
 	SLSAPI::init();
 
 	// Install the tier0 hook to intercept steamwebhelper launch
 	// This replaces --cef-enable-debugging with --remote-debugging-pipe
 	// Must be done early so it catches the next steamwebhelper spawn
 	if (Tier0Hook::install()) {
-		g_pLog->info("Tier0 hook installed - steamwebhelper will use pipe-based CDP\n");
+		LOG_INFO("Tier0 hook installed - steamwebhelper will use pipe-based CDP\n");
 	} else {
-		g_pLog->warn("Tier0 hook failed - falling back to port-based CDP\n");
+		LOG_WARN("Tier0 hook failed - falling back to port-based CDP\n");
 	}
 
 	// Inject the CEF size fix script into Steam's UI
@@ -238,19 +252,21 @@ static void load()
 	// Inject the Remove Lua button script (needs port 9001 to be listening)
 	RemoveLua::injectRemoveLuaScript();
 
+	Decompiler::cleanUp();
+
 	if (g_config.notifyInit.get())
 	{
-		const auto now = std::chrono::time_point{std::chrono::system_clock::now()};
-		const auto ymd = std::chrono::year_month_day{std::chrono::floor<std::chrono::days>(now)};
+		const auto now = std::chrono::time_point { std::chrono::system_clock::now() };
+		const auto ymd = std::chrono::year_month_day { std::chrono::floor<std::chrono::days>(now) };
 
 		//Funsy easter egg :)
 		if (static_cast<unsigned int>(ymd.month()) == 2 && static_cast<unsigned int>(ymd.day()) == 22)
 		{
-			g_pLog->info("Happy birthday SLSsteam!");
+			LOG_NOTIFY("Happy birthday SLSsteam!");
 		}
 		else
 		{
-			g_pLog->info("Loaded successfully [Modded v1.0.0]");
+			LOG_NOTIFY("Loaded successfully");
 		}
 	}
 }
@@ -262,17 +278,50 @@ unsigned int la_version(unsigned int)
 
 unsigned int la_objopen(struct link_map *map, __attribute__((unused)) Lmid_t lmid, __attribute__((unused)) uintptr_t *cookie)
 {
-	if (std::string(map->l_name).ends_with("/steamclient.so") || std::string(map->l_name).ends_with("/steamui.so"))
+	const std::string name = map->l_name;
+
+	if (name.ends_with("/steamclient.so"))
 	{
+		//Analyse modules before any relocations get applied
+		LM_FindModule("steamclient.so", &g_modSteamClient);
+		Decompiler::parseModule(g_modSteamClient);
+		//This is wasteful, but we have to analyse right away otherwise the offset get turned into
+		//addresses messing up the analysis.
+		//We could workaround it by only loading after a late module has been loaded
+		for (auto& vft : Decompiler::vftables)
+		{
+			vft.second.analyze();
+		}
+
 		load();
 	}
+	if (name.ends_with("/steamui.so"))
+	{
+		//Analyse modules before any relocations get applied
+		LM_FindModule("steamui.so", &g_modSteamUI);
+		Decompiler::parseModule(g_modSteamUI);
+		//This is wasteful, but we have to analyse right away otherwise the offset get turned into
+		//addresses messing up the analysis.
+		//We could workaround it by only loading after a late module has been loaded
+		for (auto& vft : Decompiler::vftables)
+		{
+			vft.second.analyze();
+		}
 
+		load();
+	}
+	if (name.ends_with("/libtier0_s.so"))
+	{
+		LM_FindModule("libtier0_s.so", &g_modTier0);
+
+		load();
+	}
 	// Retry tier0 hook when libtier0_s.so is loaded (it may load after steamclient.so)
 	if (setupSuccess && std::string(map->l_name).ends_with("/libtier0_s.so"))
 	{
 		if (!Tier0Hook::isHookInstalled() && Tier0Hook::install())
 		{
-			g_pLog->info("Tier0 hook installed via la_objopen (libtier0_s.so just loaded)\n");
+			LOG_INFO("Tier0 hook installed via la_objopen (libtier0_s.so just loaded)\n");
 		}
 	}
 

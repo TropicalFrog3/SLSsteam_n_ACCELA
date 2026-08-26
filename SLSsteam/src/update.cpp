@@ -7,7 +7,6 @@
 #include "utils.hpp"
 #include "version.hpp"
 
-
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -15,14 +14,26 @@
 #include <string>
 #include <sstream>
 
-static CURL* curl = nullptr;
 
 std::map<std::string, std::unordered_set<std::string>> Updater::clientHashMap = std::map<std::string, std::unordered_set<std::string>>();
 
+constexpr static const char* urls[] =
+{
+	"https://raw.githubusercontent.com/AceSLS/SLSsteam/refs/heads/main/res/updates.yaml",
+	"https://cdn.jsdelivr.net/gh/AceSLS/SLSsteam/res/updates.yaml"
+};
+
 bool Updater::init()
 {
+	if (!isEnabled())
+	{
+		return false;
+	}
+
 	std::string data;
 	auto overridePath = g_config.getDir().append("/updates.yaml");
+	bool downloadSuccess = false;
+
 	if (std::filesystem::exists(overridePath))
 	{
 		std::ifstream fstream(overridePath.c_str());
@@ -30,26 +41,40 @@ bool Updater::init()
 		buf << fstream.rdbuf();
 		data = buf.str();
 		fstream.close();
-		g_pLog->info("Using local override updates.yaml\n");
+		LOG_INFO("Using local override updates.yaml\n");
 	}
 	else
 	{
-		int res = Curl::getString("https://raw.githubusercontent.com/AceSLS/SLSsteam/refs/heads/main/res/updates.yaml", data);
-		g_pLog->info("Curl Res: %u\n", res);
+	int res;
 
-		if(res != 0)
+	for (const auto url : urls)
+	{
+		res = Curl::getString(url, data);
+		LOG_INFO("Curl Res: %u for %s with len %i\n", res, url, data.size());
+
+		if (res == 0 && data.starts_with("SafeModeHashes:\n")) //User reported empty responses
 		{
-			data = loadFromCache();
-			if(data.size() < 1)
-			{
-				return false;
-			}
-
-			g_pLog->info("Using cached updates.yaml\n");
+			downloadSuccess = true;
+			break;
 		}
+
+		LOG_WARN("Download updates.yaml failed!\n");
+	}
 	}
 
-	g_pLog->debug("updates.yaml:\n%s\n", data.c_str());
+	if (!downloadSuccess)
+	{
+		data = loadFromCache();
+		if (data.size() < 1)
+		{
+			LOG_ERROR("No cached updates.yaml found! Failing\n");
+			return false;
+		}
+
+		LOG_INFO("Using cached updates.yaml\n");
+	}
+
+	LOG_DEBUG("updates.yaml:\n%s\n", data.c_str());
 
 	try
 	{
@@ -59,20 +84,20 @@ bool Updater::init()
 			std::string version = sub.first.as<std::string>();
 			clientHashMap[version] = std::unordered_set<std::string>();
 
-			g_pLog->debug("Parsing version %s\n", version.c_str());
+			LOG_DEBUG("Parsing version %s\n", version.c_str());
 
-			for(const auto& hash : sub.second)
+			for (const auto& hash : sub.second)
 			{
-				auto str = hash.as<std::string>();
+				const auto str = hash.as<std::string>();
 				clientHashMap[version].emplace(str);
 
-				g_pLog->debug("Added %s to SLSsteam version %s\n", str.c_str(), version.c_str());
+				LOG_DEBUG("Added %s to SLSsteam version %s\n", str.c_str(), version.c_str());
 			}
 		}
 	}
 	catch(...)
 	{
-		g_pLog->info("Failed to parse updates!\n");
+		LOG_INFO("Failed to parse updates!\n");
 		return false;
 	}
 
@@ -82,33 +107,33 @@ bool Updater::init()
 
 std::string Updater::getCacheFilePath()
 {
-	auto path = g_config.getDir().append("/.updates.yaml");
+	const auto path = g_config.getDir().append("/.updates.yaml");
 	return path;
 }
 
-void Updater::saveToCache(std::string yaml)
+void Updater::saveToCache(const std::string yaml)
 {
-	auto path = Updater::getCacheFilePath();
+	const auto path = Updater::getCacheFilePath();
 
 	std::ofstream stream = std::ofstream(path.c_str());
 	stream << yaml;
 	stream.close();
 
-	g_pLog->debug("Cached res/updates.yaml!\n");
+	LOG_DEBUG("Cached res/updates.yaml!\n");
 }
 
 std::string Updater::loadFromCache()
 {
-	auto path = Updater::getCacheFilePath();
+	const auto path = Updater::getCacheFilePath();
 	if (!std::filesystem::exists(path))
 	{
 		return std::string();
 	}
 
-	g_pLog->debug("Loading updates.ymal from disk!\n");
+	LOG_DEBUG("Loading updates.ymal from disk!\n");
 
 	std::ifstream fstream = std::ifstream(path.c_str());
-	std::stringstream buf;
+	std::ostringstream buf;
 	buf << fstream.rdbuf();
 
 	fstream.close();
@@ -117,12 +142,18 @@ std::string Updater::loadFromCache()
 
 bool Updater::verifySafeModeHash()
 {
-	auto path = std::filesystem::path(g_modSteamClient.path);
+	//Don't waste time calculating SHA
+	if (!isEnabled())
+	{
+		return false;
+	}
+
+	const auto path = std::filesystem::path(g_modSteamClient.path);
 
 	try
 	{
-		std::string sha256 = Utils::getFileSHA256(path.c_str());
-		g_pLog->info("steamclient.so hash is %s\n", sha256.c_str());
+		const std::string sha256 = Utils::getFileSHA256(path.c_str());
+		LOG_INFO("steamclient.so hash is %s\n", sha256.c_str());
 
 		if (!clientHashMap.contains(VERSION))
 		{
@@ -139,9 +170,14 @@ bool Updater::verifySafeModeHash()
 	}
 	catch(std::runtime_error& err)
 	{
-		g_pLog->debug("Unable to read steamclient.so hash!\n");
+		LOG_ERROR("Unable to read steamclient.so hash!\n");
 		return false;
 	}
 
 	return true;
+}
+
+bool Updater::isEnabled()
+{
+	return g_config.safeMode.get() || g_config.warnHashMissmatch.get();
 }
