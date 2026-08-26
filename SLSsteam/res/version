@@ -1,4 +1,4 @@
-Version: beta-v1.1.0
+Version: beta-v1.1.1
 Changelog: |
   This release is an update from AceSLS-SLSsteam 20260820085507 and focuses on stability and compatibility improvements.
 
@@ -7,5 +7,6 @@ Changelog: |
   - Corrected LUA appid handling so game IDs resolve more reliably.
   - Fixed ACCELA AppID resolution logic.
   - Improved the update flow so Steam can restart safely while binaries are replaced.
+  - Unified release updates so accepting the Zenity prompt also refreshes ACCELA and Headcrab.
 
 DownloadUrl: https://github.com/TropicalFrog3/SLSsteam_n_ACCELA/releases/download/${version}/SLSsteam-n-ACCELA.zip

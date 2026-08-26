@@ -361,11 +361,12 @@ namespace AutoUpdate
                 }
                 else
                 {
-                    // Check if it belongs in the 'res' folder
-                    size_t resPos = pathStr.find("/res/");
-                    if (resPos != std::string::npos)
+                    // Only copy resources from the SLSsteam portion of the
+                    // combined release; ACCELA has its own res directory.
+                    const std::string slsResRoot = extractDir + "/SLSsteam/res/";
+                    if (pathStr.rfind(slsResRoot, 0) == 0)
                     {
-                        std::string relativeResPath = pathStr.substr(resPos + 5);
+                        std::string relativeResPath = pathStr.substr(slsResRoot.size());
                         destPath = std::filesystem::path(installDir) / "res" / relativeResPath;
                     }
                 }
@@ -379,9 +380,19 @@ namespace AutoUpdate
                 }
             }
 
-            // Clean up temp files
+            // Leave the extracted release available for the new SLSsteam binary.
+            // It consumes this marker after Steam starts, allowing the combined
+            // installer to refresh ACCELA and Headcrab during the transition.
+            const std::string pendingUpdate = installDir + "/.pending-full-update";
+            script << "if [ -f \"" << extractDir << "/install.sh\" ]; then\n";
+            script << "    printf '%s\\n' \"" << extractDir << "\" > \"" << pendingUpdate << "\"\n";
+            script << "else\n";
+            script << "    rm -rf \"" << extractDir << "\"\n";
+            script << "fi\n";
+
+            // Clean up the downloaded archive. The extracted release is removed
+            // by the one-time startup installer after it finishes.
             script << "rm -f \"" << archivePath << "\"\n";
-            script << "rm -rf \"" << extractDir << "\"\n";
 
             // Notify and relaunch Steam
             script << "notify-send -u normal \"SLSsteam\" \"Update installed! Relaunching Steam...\"\n";

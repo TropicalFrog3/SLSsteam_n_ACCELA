@@ -26,6 +26,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <link.h>
 #include <memory>
 #include <stdexcept>
@@ -99,6 +100,76 @@ static void unload()
 //TODO: Remove when unload() works properly since it should not be needed anymore after that
 static bool setupSuccess = false;
 
+static void runPendingReleaseInstaller()
+{
+	const char* home = getenv("HOME");
+	if (!home)
+	{
+		return;
+	}
+
+	const std::string installDirs[] = {
+		std::string(home) + "/.local/share/SLSsteam",
+		std::string(home) + "/.var/app/com.valvesoftware.Steam/.local/share/SLSsteam"
+	};
+
+	for (const auto& installDir : installDirs)
+	{
+		const auto marker = std::filesystem::path(installDir) / ".pending-full-update";
+		const auto legacyInstaller = std::filesystem::path(installDir) / "res/update-all.sh";
+		if (!std::filesystem::exists(marker) && !std::filesystem::exists(legacyInstaller))
+		{
+			continue;
+		}
+
+		std::string extractDir;
+		if (std::filesystem::exists(marker))
+		{
+			std::ifstream markerFile(marker);
+			std::getline(markerFile, extractDir);
+			markerFile.close();
+			std::filesystem::remove(marker);
+			std::filesystem::remove(legacyInstaller);
+		}
+
+		std::filesystem::path installer;
+		if (!extractDir.empty())
+		{
+			installer = std::filesystem::path(extractDir) / "install.sh";
+		}
+		else
+		{
+			installer = legacyInstaller;
+		}
+
+		if (!std::filesystem::exists(installer))
+		{
+			continue;
+		}
+
+		const pid_t pid = fork();
+		if (pid < 0)
+		{
+			LOG_WARN("AutoUpdate: Failed to start pending full installer\n");
+			continue;
+		}
+
+		if (pid == 0)
+		{
+			setsid();
+			const std::string cleanupCommand = extractDir.empty()
+				? "bash \"$1\"; status=$?; rm -f -- \"$1\"; exit $status"
+				: "bash \"$1/install.sh\"; status=$?; rm -rf -- \"$1\"; exit $status";
+			const char* commandArg = extractDir.empty() ? installer.c_str() : extractDir.c_str();
+			execlp("bash", "bash", "-c", cleanupCommand.c_str(), "slssteam-full-update", commandArg, nullptr);
+			_exit(127);
+		}
+
+		LOG_INFO("AutoUpdate: Starting pending ACCELA and Headcrab update\n");
+		return;
+	}
+}
+
 static void setup()
 {
 	lm_process_t proc {};
@@ -124,6 +195,8 @@ static void setup()
 		unload();
 		return;
 	}
+
+	runPendingReleaseInstaller();
 
 	LOG_DEBUG("SLSsteam loading in %s\n", proc.name);
 
