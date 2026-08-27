@@ -1,8 +1,10 @@
-Version: beta-v1.1.2
+Version: beta-v1.1.3
 Changelog: |
-  This release fixes Steam startup and makes the combined SLSsteam, ACCELA, and Headcrab installation safer on fresh devices.
+  This release fixes the post-install update loop that could prevent SLSsteam from working after accepting an update.
 
   Highlights:
+  - Only an explicit pending-update marker can start the full post-update installer.
+  - Prevented the normal update-all.sh resource from being mistaken for a pending update.
   - Prevented malformed config.yaml boolean values from aborting Steam during startup.
   - Added loader safety checks for unnamed link maps during early Steam startup.
   - Fixed fresh-device Steam wrapper creation and native launcher detection.

@@ -116,8 +116,10 @@ static void runPendingReleaseInstaller()
 	for (const auto& installDir : installDirs)
 	{
 		const auto marker = std::filesystem::path(installDir) / ".pending-full-update";
-		const auto legacyInstaller = std::filesystem::path(installDir) / "res/update-all.sh";
-		if (!std::filesystem::exists(marker) && !std::filesystem::exists(legacyInstaller))
+		// update-all.sh is a normal installed resource, not evidence of a
+		// pending update. Only the marker created by the accepted update flow
+		// may trigger the detached full installer.
+		if (!std::filesystem::exists(marker))
 		{
 			continue;
 		}
@@ -129,18 +131,15 @@ static void runPendingReleaseInstaller()
 			std::getline(markerFile, extractDir);
 			markerFile.close();
 			std::filesystem::remove(marker);
-			std::filesystem::remove(legacyInstaller);
 		}
 
-		std::filesystem::path installer;
-		if (!extractDir.empty())
+		if (extractDir.empty())
 		{
-			installer = std::filesystem::path(extractDir) / "install.sh";
+			LOG_WARN("AutoUpdate: Pending update marker is empty\n");
+			continue;
 		}
-		else
-		{
-			installer = legacyInstaller;
-		}
+
+		const std::filesystem::path installer = std::filesystem::path(extractDir) / "install.sh";
 
 		if (!std::filesystem::exists(installer))
 		{
@@ -157,10 +156,9 @@ static void runPendingReleaseInstaller()
 		if (pid == 0)
 		{
 			setsid();
-			const std::string cleanupCommand = extractDir.empty()
-				? "bash \"$1\"; status=$?; rm -f -- \"$1\"; exit $status"
-				: "bash \"$1/install.sh\"; status=$?; rm -rf -- \"$1\"; exit $status";
-			const char* commandArg = extractDir.empty() ? installer.c_str() : extractDir.c_str();
+			const std::string cleanupCommand =
+				"bash \"$1/install.sh\"; status=$?; rm -rf -- \"$1\"; exit $status";
+			const char* commandArg = extractDir.c_str();
 			execlp("bash", "bash", "-c", cleanupCommand.c_str(), "slssteam-full-update", commandArg, nullptr);
 			_exit(127);
 		}
