@@ -1,8 +1,9 @@
-Version: beta-v1.1.3
+Version: beta-v1.1.4
 Changelog: |
-  This release fixes the post-install update loop that could prevent SLSsteam from working after accepting an update.
+  This release fixes the post-install update loop and ensures release archives contain the current version manifest.
 
   Highlights:
+  - Keeps the packaged version manifest synchronized with the compiled SLSsteam binary.
   - Only an explicit pending-update marker can start the full post-update installer.
   - Prevented the normal update-all.sh resource from being mistaken for a pending update.
   - Prevented malformed config.yaml boolean values from aborting Steam during startup.
