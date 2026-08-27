@@ -48,7 +48,10 @@ install_wrapper()
 		return 0
 	fi
 
-	echo -e "#!/bin/sh\n$SLSAUDIT \"$FPATH\"" > "$SLSPATH/$EXE" '$@'
+	cat > "$SLSPATH/$EXE" <<EOF
+#!/bin/sh
+exec env $SLSAUDIT "$FPATH" "\$@"
+EOF
 
 	chmod u+x "$SLSPATH/$EXE"
 
@@ -69,7 +72,7 @@ install_desktop_file()
 	fi
 
 	if [ ! -d "$USR_APP_DIR" ]; then
-		mkdir "$USR_APP_DIR"
+		mkdir -p "$USR_APP_DIR"
 		if [ $? -ne 0 ]; then
 			echo "Failed to create $USR_APP_DIR! Aborting .desktop creation"
 			return 1
@@ -90,6 +93,7 @@ install_path()
 	if [ "$SHELLPATH" = "/usr/bin/fish" ]; then
 		SLSSTEAM_FISH="$HOME/.config/fish/conf.d/SLSsteam.fish"
 		if [ ! -f "$SLSSTEAM_FISH" ]; then
+			mkdir -p "$(dirname "$SLSSTEAM_FISH")"
 			echo "$CMD" > "$SLSSTEAM_FISH"
 			echo "Wrote $CMD to $SLSSTEAM_FISH"
 
@@ -114,7 +118,7 @@ install_slssteam()
 	if [ ! -d "$SLSDIR" ]; then
 		#Not using -p flag because it will silence errors
 		#Although I don't think there's anyone that doesn't have a ~/.local/share directory
-		mkdir "$SLSDIR"
+		mkdir -p "$SLSDIR"
 		if [ $? -ne 0 ]; then
 			echo "Unable to create $SLSDIR! Aborting"
 			exit 1
@@ -122,7 +126,7 @@ install_slssteam()
 	fi
 
 	if [ ! -d "$SLSPATH" ]; then #This whole fucking block should be unnecessary. Well, better safe than sorry. Thanks Valve for the Deck
-		mkdir "$SLSPATH"
+		mkdir -p "$SLSPATH"
 
 		if [ $? -ne 0 ]; then
 			echo "Unable to create $SLSPATH! Aborting"
@@ -130,9 +134,9 @@ install_slssteam()
 		fi
 	fi
 
-	cp -v ./bin/* "$SLSDIR/"
+	cp -v ./bin/* "$SLSDIR/" || return 1
 	mkdir -p "$SLSDIR/res"
-	cp -rv ./res/* "$SLSDIR/res/"
+	cp -rv ./res/* "$SLSDIR/res/" || return 1
 }
 
 install_flatpak()
@@ -171,15 +175,19 @@ install_flatpak()
 
 install_all()
 {
-	install_slssteam
-
-	install_path
-	if [ $? -eq 0 ]; then
-		install_wrapper steam
-		install_wrapper steam-runtime
-		#Wrapping the steam-jupiter doesn't work, probably doesn't get called from PATH
-		install_wrapper steam-native
+	if ! install_slssteam; then
+		echo "SLSsteam payload installation failed!"
+		exit 1
 	fi
+
+	install_path || true
+	# Always create explicit wrappers. Bash users do not get PATH setup from
+	# install_path, but can still use these wrappers directly or from a desktop
+	# entry.
+	install_wrapper steam
+	install_wrapper steam-runtime
+	#Wrapping the steam-jupiter doesn't work, probably doesn't get called from PATH
+	install_wrapper steam-native
 
 	install_desktop_file steam
 	#No steam-runtime.desktop (atleast on my Arch install...)

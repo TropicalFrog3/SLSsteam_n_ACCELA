@@ -351,7 +351,13 @@ unsigned int la_version(unsigned int)
 
 unsigned int la_objopen(struct link_map *map, __attribute__((unused)) Lmid_t lmid, __attribute__((unused)) uintptr_t *cookie)
 {
-	const std::string name = map->l_name;
+	// The loader may provide an unnamed link map during early startup.
+	if (!map || !map->l_name)
+	{
+		return 0;
+	}
+
+	const std::string name(map->l_name);
 
 	if (name.ends_with("/steamclient.so"))
 	{
@@ -390,7 +396,7 @@ unsigned int la_objopen(struct link_map *map, __attribute__((unused)) Lmid_t lmi
 		load();
 	}
 	// Retry tier0 hook when libtier0_s.so is loaded (it may load after steamclient.so)
-	if (setupSuccess && std::string(map->l_name).ends_with("/libtier0_s.so"))
+	if (setupSuccess && name.ends_with("/libtier0_s.so"))
 	{
 		if (!Tier0Hook::isHookInstalled() && Tier0Hook::install())
 		{

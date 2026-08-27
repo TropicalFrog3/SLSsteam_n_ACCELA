@@ -1,12 +1,15 @@
-Version: beta-v1.1.1
+Version: beta-v1.1.2
 Changelog: |
-  This release is an update from AceSLS-SLSsteam 20260820085507 and focuses on stability and compatibility improvements.
+  This release fixes Steam startup and makes the combined SLSsteam, ACCELA, and Headcrab installation safer on fresh devices.
 
   Highlights:
-  - Fixed a Steam crash caused by config.yaml parsing exceptions.
+  - Prevented malformed config.yaml boolean values from aborting Steam during startup.
+  - Added loader safety checks for unnamed link maps during early Steam startup.
+  - Fixed fresh-device Steam wrapper creation and native launcher detection.
+  - Ensured the bundled, tested SLSsteam payload is installed after Headcrab.
+  - Preserved the full update flow for SLSsteam, ACCELA, and Headcrab.
   - Corrected LUA appid handling so game IDs resolve more reliably.
   - Fixed ACCELA AppID resolution logic.
   - Improved the update flow so Steam can restart safely while binaries are replaced.
-  - Unified release updates so accepting the Zenity prompt also refreshes ACCELA and Headcrab.
 
 DownloadUrl: https://github.com/TropicalFrog3/SLSsteam_n_ACCELA/releases/download/${version}/SLSsteam-n-ACCELA.zip

@@ -104,16 +104,46 @@ public:
 	template<typename T>
 	T getSetting(const YAML::Node& node, const char* name, const T defVal, const bool silent = false)
 	{
-		if (!node[name])
-		{
-			//LOG_NOTIFYLONG("Missing %s in configfile! Using default", name);
-			setError(ELoadError::MissingKey, name);
-			return defVal;
-		}
-
 		try
 		{
-			const T val = node[name].as<T>();
+			const auto setting = node[name];
+			if (!setting)
+			{
+				//LOG_NOTIFYLONG("Missing %s in configfile! Using default", name);
+				setError(ELoadError::MissingKey, name);
+				return defVal;
+			}
+
+			if constexpr (std::is_same_v<T, bool>)
+			{
+				// Do not let a malformed boolean escape through the loader audit
+				// callback. yaml-cpp's typed conversion throws for values such as
+				// "nooo", which aborts Steam before it can start.
+				if (!setting.IsScalar())
+				{
+					setError(ELoadError::ParsingException, name);
+					return defVal;
+				}
+
+				const std::string raw = setting.Scalar();
+				if (raw == "1" || raw == "true" || raw == "True" || raw == "TRUE" ||
+					raw == "yes" || raw == "Yes" || raw == "YES" ||
+					raw == "on" || raw == "On" || raw == "ON")
+				{
+					return true;
+				}
+				if (raw == "0" || raw == "false" || raw == "False" || raw == "FALSE" ||
+					raw == "no" || raw == "No" || raw == "NO" ||
+					raw == "off" || raw == "Off" || raw == "OFF")
+				{
+					return false;
+				}
+
+				setError(ELoadError::ParsingException, name);
+				return defVal;
+			}
+
+			const T val = setting.as<T>();
 
 			if (silent)
 			{
@@ -131,9 +161,19 @@ public:
 
 			return val;
 		}
-		catch (YAML::BadConversion& er)
+		catch (const YAML::Exception&)
 		{
 			//LOG_NOTIFY("Failed to parse value of %s! Using default\n", name);
+			setError(ELoadError::ParsingException, name);
+			return defVal;
+		}
+		catch (const std::exception&)
+		{
+			setError(ELoadError::ParsingException, name);
+			return defVal;
+		}
+		catch (...)
+		{
 			setError(ELoadError::ParsingException, name);
 			return defVal;
 		}
