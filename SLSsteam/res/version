@@ -1,4 +1,4 @@
-Version: beta-v1.1.4
+Version: beta-v1.1.5
 Changelog: |
   This release adds DepotBox LUA/manifest download provider integration with API key support, fixes the post-install update loop, and ensures release archives contain the current version manifest.
 
