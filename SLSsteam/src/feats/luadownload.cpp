@@ -315,7 +315,8 @@ namespace LuaDownload
 
     // ── Main download & install ────────────────────────────────────────
 
-    bool downloadAndInstall(const std::string& appId)
+    bool downloadAndInstall(const std::string& appId, int providerIndex,
+                            const std::vector<int>& providerOrder)
     {
         LOG_INFO("LuaDownload: Starting download for appid=%s\n", appId.c_str());
         pushStatus(appId, "Checking APIs...");
@@ -364,9 +365,27 @@ namespace LuaDownload
         }
         else
         {
-            // Try each API provider
-            for (const auto& api : g_apis)
+            std::vector<int> apiOrder;
+            if (providerIndex >= 0)
             {
+                apiOrder.push_back(providerIndex);
+            }
+            else if (!providerOrder.empty())
+            {
+                apiOrder = providerOrder;
+            }
+            else
+            {
+                for (size_t i = 0; i < std::size(g_apis); ++i)
+                    apiOrder.push_back(static_cast<int>(i));
+            }
+
+            // Try each selected API provider in the requested order.
+            for (const int apiIndex : apiOrder)
+            {
+                if (apiIndex < 0 || apiIndex >= static_cast<int>(std::size(g_apis)))
+                    continue;
+                const auto& api = g_apis[apiIndex];
                 // Build URL from template
                 std::string url = api.urlTemplate;
                 size_t pos = url.find("<appid>");

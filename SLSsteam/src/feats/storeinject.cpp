@@ -39,6 +39,22 @@ static std::string urlDecode(const std::string& str) {
     }
     return ret;
 }
+
+static std::vector<int> parseProviderOrder(const std::string& value)
+{
+    std::vector<int> order;
+    std::stringstream stream(value);
+    std::string item;
+    while (std::getline(stream, item, ','))
+    {
+        try
+        {
+            order.push_back(std::stoi(item));
+        }
+        catch (...) {}
+    }
+    return order;
+}
 #include <sstream>
 #include <string>
 #include <algorithm>
@@ -598,10 +614,71 @@ namespace StoreInject
                         removeSearchPos = idStart;
                     }
 
+                    // Check for an explicit provider selection in any URL
+                    size_t providerSearchPos = 0;
+                    while ((providerSearchPos = response.find("#sls-click-provider-", providerSearchPos)) != std::string::npos)
+                    {
+                        size_t providerStart = providerSearchPos + 20;
+                        size_t providerEnd = response.find('-', providerStart);
+                        size_t idEnd = providerEnd == std::string::npos ? std::string::npos : response.find('-', providerEnd + 1);
+                        size_t tsEnd = idEnd == std::string::npos ? std::string::npos : response.find_first_of("\"", idEnd + 1);
+                        if (providerEnd != std::string::npos && idEnd != std::string::npos && tsEnd != std::string::npos)
+                        {
+                            try
+                            {
+                                int providerIndex = std::stoi(response.substr(providerStart, providerEnd - providerStart));
+                                std::string productId = response.substr(providerEnd + 1, idEnd - providerEnd - 1);
+                                std::string timestamp = response.substr(idEnd + 1, tsEnd - idEnd - 1);
+                                if (timestamp != lastProcessedTimestamp)
+                                {
+                                    lastProcessedTimestamp = timestamp;
+                                    LOG_INFO("Download Lua provider %d clicked for Product ID: %s\n", providerIndex, productId.c_str());
+                                    std::string pid = productId;
+                                    std::thread([pid, providerIndex]() {
+                                        LuaDownload::downloadAndInstall(pid, providerIndex);
+                                    }).detach();
+                                }
+                            }
+                            catch (...) {}
+                        }
+                        providerSearchPos = tsEnd == std::string::npos ? providerSearchPos + 20 : tsEnd;
+                    }
+
+                    // Check for auto-search requests in any URL
+                    size_t autoSearchPos = 0;
+                    while ((autoSearchPos = response.find("#sls-click-auto-", autoSearchPos)) != std::string::npos)
+                    {
+                        size_t idStart = autoSearchPos + 16;
+                        size_t idEnd = response.find('-', idStart);
+                        size_t orderEnd = idEnd == std::string::npos ? std::string::npos : response.find('-', idEnd + 1);
+                        size_t tsEnd = orderEnd == std::string::npos ? std::string::npos : response.find_first_of("\"", orderEnd + 1);
+                        if (idEnd != std::string::npos && orderEnd != std::string::npos && tsEnd != std::string::npos)
+                        {
+                            std::string pid = response.substr(idStart, idEnd - idStart);
+                            auto order = parseProviderOrder(response.substr(idEnd + 1, orderEnd - idEnd - 1));
+                            std::string timestamp = response.substr(orderEnd + 1, tsEnd - orderEnd - 1);
+                            if (timestamp != lastProcessedTimestamp)
+                            {
+                                lastProcessedTimestamp = timestamp;
+                                LOG_INFO("Auto-search Lua download clicked for Product ID: %s\n", pid.c_str());
+                                std::thread([pid, order]() {
+                                    LuaDownload::downloadAndInstall(pid, -1, order);
+                                }).detach();
+                            }
+                        }
+                        autoSearchPos = tsEnd == std::string::npos ? autoSearchPos + 16 : tsEnd;
+                    }
+
                     // Check for #sls-click- in any URL
                     size_t searchPos = 0;
                     while ((searchPos = response.find("#sls-click-", searchPos)) != std::string::npos)
                     {
+                        if (response.compare(searchPos, 20, "#sls-click-provider-") == 0 ||
+                            response.compare(searchPos, 16, "#sls-click-auto-") == 0)
+                        {
+                            searchPos += 11;
+                            continue;
+                        }
                         size_t idStart = searchPos + 11; // after "#sls-click-"
                         size_t idEnd = response.find_first_of("-\"", idStart);
                         if (idEnd != std::string::npos && idEnd > idStart && response[idEnd] == '-')

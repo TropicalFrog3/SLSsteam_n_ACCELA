@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace LuaDownload
 {
@@ -18,5 +19,6 @@ namespace LuaDownload
      * Returns true if the download and install succeeded.
      */
     std::string findSteamRoot();
-    bool downloadAndInstall(const std::string& appId);
+    bool downloadAndInstall(const std::string& appId, int providerIndex = -1,
+                            const std::vector<int>& providerOrder = {});
 }

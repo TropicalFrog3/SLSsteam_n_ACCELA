@@ -2,6 +2,32 @@
 .git
 .github
 bin
-obj*
-releases
+obj
 zip
+
+# Build artifacts
+build/
+cmake_install.cmake
+CMakeCache.txt
+CMakeFiles/
+*.o
+*.a
+*.so
+*.dylib
+
+# IDE/Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Generated files
+*.d
+*.cmake
+Makefile
+
+# System
+.DS_Store
+Thumbs.db

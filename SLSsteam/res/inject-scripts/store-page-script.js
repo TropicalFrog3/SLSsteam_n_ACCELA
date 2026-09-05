@@ -13,6 +13,127 @@
     // Cache of app unlock status: { appid: { exists, pending, onlineFixInstalled, autoCrackInstalled } }
     var appUnlockStatus = {};
 
+    var luaProviders = [
+        { name: 'Ryuu', key: 'sls-ryuu-key' },
+        { name: 'DepotBox', key: 'sls-dpbx-key' },
+        { name: 'Morrenus', key: 'sls-morr-key' },
+        { name: 'Sushi', key: 'sls-sushi-key' },
+        { name: 'Spinoza', key: 'sls-spinoza-key' },
+        { name: 'TwentyTwo Cloud', key: 'sls-twentytwo-key' }
+    ];
+
+    function getProviderOrder() {
+        var saved = (localStorage.getItem('sls-lua-provider-order') || '').split(',');
+        var order = [];
+        saved.forEach(function(value) {
+            var index = parseInt(value, 10);
+            if (index >= 0 && index < luaProviders.length && order.indexOf(index) === -1) order.push(index);
+        });
+        for (var i = 0; i < luaProviders.length; i++) {
+            if (order.indexOf(i) === -1) order.push(i);
+        }
+        return order;
+    }
+
+    function saveProviderOrder(order) {
+        localStorage.setItem('sls-lua-provider-order', order.join(','));
+    }
+
+    function escapeHtml(value) {
+        return String(value).replace(/[&<>"']/g, function(character) {
+            return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[character];
+        });
+    }
+
+    function sendApiKeys() {
+        var morr = localStorage.getItem('sls-morr-key') || '%MORR_KEY%';
+        var ryuu = localStorage.getItem('sls-ryuu-key') || '%RYUU_KEY%';
+        var dpbx = localStorage.getItem('sls-dpbx-key') || '%DPBX_KEY%';
+        window.location.hash = 'sls-auth-MORR=' + encodeURIComponent(morr) + '&RYUU=' + encodeURIComponent(ryuu) + '&DPBX=' + encodeURIComponent(dpbx) + '-TS=' + Date.now();
+    }
+
+    function sendLuaRequest(appid, providerIndex) {
+        var stamp = Date.now();
+        if (providerIndex === null) {
+            window.location.hash = 'sls-click-auto-' + appid + '-' + getProviderOrder().join(',') + '-' + stamp;
+        } else {
+            window.location.hash = 'sls-click-provider-' + providerIndex + '-' + appid + '-' + stamp;
+        }
+    }
+
+    function openLuaProviderConfig(appid) {
+        if (document.getElementById('sls-overlay-modal')) return;
+        var overlay = document.createElement('div');
+        overlay.id = 'sls-overlay-modal';
+        overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(10,12,18,0.85);z-index:999999;display:flex;justify-content:center;align-items:center;backdrop-filter:blur(8px);';
+        var order = getProviderOrder();
+        var rows = '';
+        order.forEach(function(providerIndex, position) {
+            var provider = luaProviders[providerIndex];
+            var apiKey = localStorage.getItem(provider.key) || '';
+            rows += '<div data-sls-provider="' + providerIndex + '" style="display:flex;align-items:center;gap:8px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.08);">' +
+                '<strong style="flex:1;color:#f5f6f8;font-size:13px;">' + provider.name + '</strong>' +
+                '<div style="display:flex;align-items:center;gap:6px;min-width:190px;border:1px solid #3b4252;border-radius:5px;padding:3px 6px;">' +
+                '<span title="API key" aria-hidden="true" style="color:#a5b4fc;font-size:15px;">&#128273;</span>' +
+                '<input data-sls-api-key="' + providerIndex + '" aria-label="API key for ' + escapeHtml(provider.name) + '" value="' + escapeHtml(apiKey) + '" placeholder="API key" type="text" style="min-width:0;flex:1;background:transparent;border:0;outline:0;color:#f5f6f8;padding:5px 2px;font-size:12px;" />' +
+                '</div>' +
+                '<button data-sls-up="' + providerIndex + '" title="Move provider up" style="margin-right:4px;background:#252a36;border:0;color:#d6d7d9;padding:5px 8px;border-radius:5px;cursor:pointer;"' + (position === 0 ? ' disabled' : '') + '>Up</button>' +
+                '<button data-sls-down="' + providerIndex + '" title="Move provider down" style="margin-right:4px;background:#252a36;border:0;color:#d6d7d9;padding:5px 8px;border-radius:5px;cursor:pointer;"' + (position === order.length - 1 ? ' disabled' : '') + '>Down</button>' +
+                '<button data-sls-provider-download="' + providerIndex + '" style="margin-right:4px;background:#1a9fff;border:0;color:#fff;padding:5px 9px;border-radius:5px;cursor:pointer;">Download</button>' +
+                '</div>';
+        });
+        overlay.innerHTML = '<div style="background:#161920;border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:24px;width:auto;max-width:calc(100% - 32px);box-shadow:0 20px 50px rgba(0,0,0,0.6);font-family:Arial,sans-serif;color:#f5f6f8;">' +
+            '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;"><div><h2 style="margin:0;font-size:20px;">Lua download provider</h2><p style="margin:5px 0 0;color:#8f98a0;font-size:12px;">AppID: ' + appid + '</p></div><button id="sls-provider-close" style="margin-right:4px;background:transparent;border:0;color:#9ca3af;font-size:20px;cursor:pointer;">X</button></div>' +
+            '<div>' + rows + '</div>' +
+            '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px;"><button id="sls-auto-search" style="min-width:100%;background:#4f46e5;border:0;color:#fff;padding:9px 14px;border-radius:6px;cursor:pointer;font-weight:600;">Auto Download</button></div>' +
+            '</div>';
+        document.body.appendChild(overlay);
+
+        function close() { overlay.remove(); }
+        document.getElementById('sls-provider-close').onclick = close;
+        var cancelButton = document.getElementById('sls-provider-cancel');
+        if (cancelButton) cancelButton.onclick = close;
+        document.getElementById('sls-auto-search').onclick = function() {
+            close();
+            sendLuaRequest(appid, null);
+        };
+        overlay.querySelectorAll('[data-sls-api-key]').forEach(function(input) {
+            function saveApiKey() {
+                var provider = luaProviders[parseInt(input.getAttribute('data-sls-api-key'), 10)];
+                localStorage.setItem(provider.key, input.value);
+                sendApiKeys();
+            }
+            input.addEventListener('blur', saveApiKey);
+            input.addEventListener('keydown', function(event) {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    saveApiKey();
+                    input.blur();
+                }
+            });
+        });
+        overlay.querySelectorAll('[data-sls-up], [data-sls-down]').forEach(function(button) {
+            button.onclick = function() {
+                var providerIndex = parseInt(button.getAttribute('data-sls-up') || button.getAttribute('data-sls-down'), 10);
+                var current = getProviderOrder();
+                var from = current.indexOf(providerIndex);
+                var to = button.hasAttribute('data-sls-up') ? from - 1 : from + 1;
+                if (from < 0 || to < 0 || to >= current.length) return;
+                current.splice(from, 1);
+                current.splice(to, 0, providerIndex);
+                saveProviderOrder(current);
+                close();
+                openLuaProviderConfig(appid);
+            };
+        });
+        overlay.querySelectorAll('[data-sls-provider-download]').forEach(function(button) {
+            button.onclick = function() {
+                close();
+                sendLuaRequest(appid, parseInt(button.getAttribute('data-sls-provider-download'), 10));
+            };
+        });
+    }
+
     function setupDownloadButton(luaLink, luaBtn, productID, cartBtn) {
         var span = luaLink.querySelector('span');
         if (span) span.innerText = 'Download Lua';
@@ -22,20 +143,15 @@
         luaLink.onclick = function(e) {
             e.preventDefault();
             e.stopPropagation();
-            var clickSpan = luaLink.querySelector('span');
-            if (clickSpan) clickSpan.innerText = 'Downloading...';
-            luaLink.style.filter = 'hue-rotate(50deg) brightness(1.0)';
-            luaLink.style.pointerEvents = 'none';
-            luaLink.style.opacity = '0.8';
             luaBtn.dataset.slsAppid = productID;
             ping('Lua Click: ' + productID);
-            window.location.hash = 'sls-click-' + productID + '-' + Date.now();
+            openLuaProviderConfig(productID);
         };
     }
 
     function setupRemoveButton(luaLink, luaBtn, productID, cartBtn) {
         var span = luaLink.querySelector('span');
-        if (span) span.innerText = 'Remove Lua';
+        if (span) span.innerText = 'Already installed';
         luaLink.style.filter = 'hue-rotate(320deg) brightness(1.1)';
         luaLink.style.pointerEvents = '';
         luaLink.style.opacity = '';
@@ -208,20 +324,26 @@
                 luaBtn.classList.add('sls-lua-btn');
                 luaBtn.dataset.slsProcessed = '1';
                 luaBtn.style.display = 'inline-block';
-                luaBtn.style.marginLeft = '8px';
+                luaBtn.style.marginRight = '4px';
+                luaBtn.style.float = 'right';
                 var luaLink = luaBtn.querySelector('a');
                 if (luaLink) {
                     luaLink.href = 'javascript:void(0)';
                     luaLink.removeAttribute('id');
 
-                    // Default to Download Lua, then check if already unlocked
-                    setupDownloadButton(luaLink, luaBtn, productID, cartBtn);
+                    // Avoid showing the download action until the installed state is known.
+                    var initialSpan = luaLink.querySelector('span');
+                    if (initialSpan) initialSpan.innerText = 'Checking Lua...';
+                    luaLink.style.filter = 'hue-rotate(200deg) brightness(1.0)';
+                    luaLink.style.pointerEvents = 'none';
 
                     // Check unlock status via callback server
                     if (appUnlockStatus[productID] !== undefined) {
                         var cached = appUnlockStatus[productID];
                         if (cached && (cached.exists || cached.pending)) {
                             setupRemoveButton(luaLink, luaBtn, productID, cartBtn);
+                        } else {
+                            setupDownloadButton(luaLink, luaBtn, productID, cartBtn);
                         }
                     } else {
                         // Query the server
@@ -233,22 +355,25 @@
                                     var isUnlocked = data.exists || data.pending;
                                     if (isUnlocked) {
                                         setupRemoveButton(ll, lb, pid, cartBtn);
+                                    } else {
+                                        setupDownloadButton(ll, lb, pid, cartBtn);
                                     }
                                 })
                                 .catch(function() {
                                     ping('Check failed for ' + pid + ', defaulting to Download');
+                                    setupDownloadButton(ll, lb, pid, cartBtn);
                                 });
                         })(luaLink, luaBtn, productID);
                     }
                 }
-                cartBtn.parentNode.insertBefore(luaBtn, cartBtn.nextSibling);
                 // Settings button
                 var setBtn = cartBtn.cloneNode(true);
                 setBtn.classList.remove('btn_addtocart', 'btn_add_to_cart');
                 setBtn.classList.add('sls-settings-btn');
                 setBtn.dataset.slsProcessed = '1';
                 setBtn.style.display = 'inline-block';
-                setBtn.style.marginLeft = '4px';
+                setBtn.style.marginRight = '4px';
+                setBtn.style.float = 'right';
                 var setLink = setBtn.querySelector('a');
                 if (setLink) {
                     setLink.href = 'javascript:void(0)';
@@ -256,14 +381,29 @@
                     var spanSet = setLink.querySelector('span');
                     if (spanSet) spanSet.innerText = 'Config';
                     setLink.style.filter = 'hue-rotate(200deg) brightness(1.1)';
-                    setLink.style.padding = '0 10px';
                     setLink.onclick = function(e) {
                         e.preventDefault();
                         e.stopPropagation();
-                        openSlsConfig(productID);
+                        openLuaProviderConfig(productID);
                     };
                 }
-                luaBtn.parentNode.insertBefore(setBtn, luaBtn.nextSibling);
+                var header = document.querySelector('div.apphub_HeaderStandardTop') ||
+                    document.querySelector('.apphub_HeaderStandardTop');
+                if (header) {
+                    var appName = null;
+                    for (var childIndex = 0; childIndex < header.children.length; childIndex++) {
+                        if (header.children[childIndex].classList.contains('apphub_AppName')) {
+                            appName = header.children[childIndex];
+                            break;
+                        }
+                    }
+                    var insertionPoint = appName || header.firstChild;
+                    header.insertBefore(luaBtn, insertionPoint);
+                    // header.insertBefore(setBtn, luaBtn);
+                } else {
+                    cartBtn.parentNode.insertBefore(luaBtn, cartBtn.nextSibling);
+                    // luaBtn.parentNode.insertBefore(setBtn, luaBtn.nextSibling);
+                }
             }
         });
         if (observer && document.body) observer.observe(document.body, { childList: true, subtree: true });

@@ -41,7 +41,8 @@ ifeq ($(shell type mold &> /dev/null && echo "found"),found)
 	LDFLAGS += -fuse-ld=mold
 endif
 
-FLAGSSHA := $(shell echo "$(CXXFLAGS) & $(LDFLAGS)" | sha256sum | cut -d " " -f 1)
+COMPILER_VERSION := $(shell $(CXX) -dumpfullversion -dumpversion)
+FLAGSSHA := $(shell echo "$(CXX) $(COMPILER_VERSION) & $(CXXFLAGS) & $(LDFLAGS)" | sha256sum | cut -d " " -f 1)
 SLSSTEAMSO := bin/SLSsteam-$(FLAGSSHA).so
 objs := $(srcs:src/%.cpp=obj/$(FLAGSSHA)/%.o)
 deps := $(objs:%.o=%.d)

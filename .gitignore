@@ -1,4 +1,5 @@
 # Build artifacts and object files
+bin/
 obj/
 build/
 dist/
@@ -11,9 +12,26 @@ dist/
 
 # Python
 __pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+.eggs/
+.venv/
+venv/
+ENV/
+env/
+.env
+.Python
+*.so
 
 # C++
 .clangd
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+*.cmake
+Makefile
 
 # IDE/Editor
 .vscode/
@@ -29,6 +47,8 @@ __pycache__/
 
 # Dependencies
 node_modules/
+vendor/
+lib/
 
 # System files
 .git/
@@ -43,15 +63,8 @@ Thumbs.db
 *.out
 zip/
 dist/
-SLSsteam/scratch/
-prod-release/*
 
 # Nix
 result/
 .direnv/
 .envrc
-
-Side-Project-DO-NOT-USE-IN-THE-REAL-PROJECT/*
-SLSsteam-n-ACCELA.zip
-SLSsteam-n-ACCELA-fixed.zip
-venv/*
