@@ -2,6 +2,7 @@
 #include "cdpinject.hpp"
 #include "../log.hpp"
 #include "../config.hpp"
+#include "../version.hpp"
 
 #include <dlfcn.h>
 #include <filesystem>
@@ -65,6 +66,7 @@ namespace RemoveLua
         std::vector<std::string> pagesNeedAppDetails;
         std::vector<std::string> pagesNeedImportLua;
         std::vector<std::string> pagesNeedAutoCollection;
+        std::vector<std::string> pagesNeedVersionTopBar;
 
         for (auto& page : pages)
         {
@@ -86,9 +88,13 @@ namespace RemoveLua
             {
                 pagesNeedImportLua.push_back(page.webSocketDebuggerUrl);
             }
+            if (!CDPInject::isScriptInjected(page.webSocketDebuggerUrl, "!!window.__slsVersionTopBarInjected"))
+            {
+                pagesNeedVersionTopBar.push_back(page.webSocketDebuggerUrl);
+            }
         }
 
-        if (pagesNeedAppDetails.empty() && pagesNeedImportLua.empty() && pagesNeedAutoCollection.empty())
+        if (pagesNeedAppDetails.empty() && pagesNeedImportLua.empty() && pagesNeedAutoCollection.empty() && pagesNeedVersionTopBar.empty())
         {
             return true;
         }
@@ -97,6 +103,7 @@ namespace RemoveLua
         static std::string cachedAppDetailsScript;
         static std::string cachedImportLuaScript;
         static std::string cachedAutoCollectionScript;
+        static std::string cachedVersionTopBarScript;
 
         if (!pagesNeedAppDetails.empty() && cachedAppDetailsScript.empty())
         {
@@ -124,6 +131,19 @@ namespace RemoveLua
             }
         }
 
+        if (!pagesNeedVersionTopBar.empty() && cachedVersionTopBarScript.empty())
+        {
+            cachedVersionTopBarScript = loadResourceFile("version-top-bar.js");
+            if (cachedVersionTopBarScript.empty()) {
+                LOG_DEBUG("Failed to load version-top-bar.js");
+                return false;
+            }
+
+            size_t versionPos = cachedVersionTopBarScript.find("%VERSION%");
+            if (versionPos != std::string::npos)
+                cachedVersionTopBarScript.replace(versionPos, 9, VERSION);
+        }
+
         for (const auto& wsUrl : pagesNeedAppDetails)
         {
             CDPInject::injectJS(wsUrl, cachedAppDetailsScript);
@@ -137,6 +157,11 @@ namespace RemoveLua
         for (const auto& wsUrl : pagesNeedAutoCollection)
         {
             CDPInject::injectJS(wsUrl, cachedAutoCollectionScript);
+        }
+
+        for (const auto& wsUrl : pagesNeedVersionTopBar)
+        {
+            CDPInject::injectJS(wsUrl, cachedVersionTopBarScript);
         }
 
         return true;
