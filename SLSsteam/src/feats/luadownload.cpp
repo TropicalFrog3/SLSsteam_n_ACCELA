@@ -29,33 +29,39 @@ namespace LuaDownload
         const char* urlTemplate;  // <appid> is replaced with the actual app ID
         int successCode;
         int unavailableCode;
+        int timeoutSec;           // CURLOPT_TIMEOUT — 0 means use default (60)
     };
 
     static const ApiProvider g_apis[] = {
         {
             "Ryuu (API Key)",
             "https://generator.ryuu.lol/secure_download?appid=<appid>&source=SLSsteam-<steamid>&auth_code=",
-            200, 404
+            200, 404, 60
+        },
+        {
+            "DepotBox",
+            "https://depotbox.org/api/direct-download?appid=<appid>",
+            200, 404, 900
         },
         {
             "Morrenus",
             "https://hubcapmanifest.com/api/v1/manifest/<appid>",
-            200, 404
+            200, 404, 60
         },
         {
             "Sushi",
             "https://raw.githubusercontent.com/sushi-dev55-alt/sushitools-games-repo-alt/refs/heads/main/<appid>.zip",
-            200, 404
+            200, 404, 60
         },
         {
             "Spinoza",
             "https://github.com/SPIN0ZAi/SB_manifest_DB/archive/refs/heads/<appid>.zip",
-            200, 404
+            200, 404, 60
         },
         {
             "TwentyTwo Cloud",
             "https://twentytwocloud.com/secure_download?auth=1771526723_73652ce834428eea993e88dd1ccbe5be_442b8efb5c05f1bf8ea5ca46&appid=<appid>",
-            200, 404
+            200, 404, 60
         },
     };
 
@@ -147,7 +153,7 @@ namespace LuaDownload
      * Download a URL to a file using libcurl.
      * Returns the HTTP status code, or -1 on connection/curl error.
      */
-    static int downloadToFile(const std::string& url, const std::string& destPath, const std::string& apiName, const std::string& authHeader = "")
+    static int downloadToFile(const std::string& url, const std::string& destPath, const std::string& apiName, const std::string& authHeader = "", int timeoutSec = 60)
     {
         CURL* curl = curl_easy_init();
         if (!curl) return -1;
@@ -169,7 +175,7 @@ namespace LuaDownload
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curlWriteCallback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, static_cast<long>(timeoutSec > 0 ? timeoutSec : 60));
         curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15L);
         
         // Use a more browser-like User-Agent to avoid some basic blocks
@@ -385,12 +391,21 @@ namespace LuaDownload
                 {
                     url += g_config.ryuuKey.get();
                 }
+                else if (std::string(api.name) == "DepotBox")
+                {
+                    if (g_config.depotBoxKey.get().empty())
+                    {
+                        LOG_DEBUG("LuaDownload: Skipping DepotBox (no API key configured)\n");
+                        continue;
+                    }
+                    authHeader = "X-API-Key: " + g_config.depotBoxKey.get();
+                }
 
                 LOG_INFO("LuaDownload: Trying API '%s' -> %s\n", api.name, url.c_str());
                 pushStatus(appId, std::string("Trying ") + api.name + "...");
 
                 // Download
-                int httpCode = downloadToFile(url, zipPath, api.name, authHeader);
+                int httpCode = downloadToFile(url, zipPath, api.name, authHeader, api.timeoutSec);
                 LOG_DEBUG("LuaDownload: API '%s' returned HTTP %d\n", api.name, httpCode);
 
                 // Steam browser fallback for Ryuu when curl fails (e.g. Cloudflare blocks direct requests)

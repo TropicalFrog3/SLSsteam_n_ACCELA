@@ -64,13 +64,19 @@ namespace RemoveLua
 
         std::vector<std::string> pagesNeedAppDetails;
         std::vector<std::string> pagesNeedImportLua;
+        std::vector<std::string> pagesNeedAutoCollection;
 
         for (auto& page : pages)
         {
             if (page.webSocketDebuggerUrl.empty()) continue;
 
-            if (page.title == "SharedJSContext")
+            if (page.title == "SharedJSContext") {
+                if (!CDPInject::isScriptInjected(page.webSocketDebuggerUrl, "!!window.__slsAutoCollectionInjected"))
+                {
+                    pagesNeedAutoCollection.push_back(page.webSocketDebuggerUrl);
+                }
                 continue;
+            }
 
             if (!CDPInject::isScriptInjected(page.webSocketDebuggerUrl, "!!window.__slsAppDetailsInjected"))
             {
@@ -82,7 +88,7 @@ namespace RemoveLua
             }
         }
 
-        if (pagesNeedAppDetails.empty() && pagesNeedImportLua.empty())
+        if (pagesNeedAppDetails.empty() && pagesNeedImportLua.empty() && pagesNeedAutoCollection.empty())
         {
             return true;
         }
@@ -90,6 +96,7 @@ namespace RemoveLua
         // Lazy-loaded cache
         static std::string cachedAppDetailsScript;
         static std::string cachedImportLuaScript;
+        static std::string cachedAutoCollectionScript;
 
         if (!pagesNeedAppDetails.empty() && cachedAppDetailsScript.empty())
         {
@@ -108,6 +115,14 @@ namespace RemoveLua
                 return false;
             }
         }
+        
+        if (!pagesNeedAutoCollection.empty() && cachedAutoCollectionScript.empty())
+        {
+            cachedAutoCollectionScript = loadResourceFile("auto-collection.js");
+            if (!cachedAutoCollectionScript.empty()) {
+                cachedAutoCollectionScript = "window.__slsAutoCollectionInjected = true;\n" + cachedAutoCollectionScript;
+            }
+        }
 
         for (const auto& wsUrl : pagesNeedAppDetails)
         {
@@ -117,6 +132,11 @@ namespace RemoveLua
         for (const auto& wsUrl : pagesNeedImportLua)
         {
             CDPInject::injectJS(wsUrl, cachedImportLuaScript);
+        }
+
+        for (const auto& wsUrl : pagesNeedAutoCollection)
+        {
+            CDPInject::injectJS(wsUrl, cachedAutoCollectionScript);
         }
 
         return true;

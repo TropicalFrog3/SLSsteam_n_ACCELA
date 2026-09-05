@@ -234,6 +234,7 @@ bool CConfig::loadSettings(bool firstLoad)
 	
 	morrenusKey = getSetting<std::string>(node, "MorrenusKey", "");
 	ryuuKey = getSetting<std::string>(node, "RyuuKey", "");
+	depotBoxKey = getSetting<std::string>(node, "DepotBoxKey", "");
 
 	const std::lock_guard appsChanged(appsChangedMutex);
 	const auto prevAppIds = addedAppIds.get();
@@ -747,7 +748,7 @@ bool CConfig::removeAdditionalAppId(uint32_t appId)
 	return true;
 }
 
-bool CConfig::updateApiAuth(const std::string& newMorrenus, const std::string& newRyuu)
+bool CConfig::updateApiAuth(const std::string& newMorrenus, const std::string& newRyuu, const std::string& newDepotBox)
 {
 	const std::string configPath = getPath();
 	std::ifstream inFile(configPath);
@@ -757,6 +758,7 @@ bool CConfig::updateApiAuth(const std::string& newMorrenus, const std::string& n
 	std::string line;
 	bool foundMorrenus = false;
 	bool foundRyuu = false;
+	bool foundDepotBox = false;
 
 
 	while (std::getline(inFile, line))
@@ -771,6 +773,11 @@ bool CConfig::updateApiAuth(const std::string& newMorrenus, const std::string& n
 			lines.push_back("RyuuKey: \"" + newRyuu + "\"");
 			foundRyuu = true;
 		}
+		else if (line.find("DepotBoxKey:") == 0)
+		{
+			lines.push_back("DepotBoxKey: \"" + newDepotBox + "\"");
+			foundDepotBox = true;
+		}
 		else if (line.find("RyuuCookies:") == 0)
 		{
 			continue; // Skip old RyuuCookies line (deprecated)
@@ -784,6 +791,7 @@ bool CConfig::updateApiAuth(const std::string& newMorrenus, const std::string& n
 
 	if (!foundMorrenus) lines.push_back("MorrenusKey: \"" + newMorrenus + "\"");
 	if (!foundRyuu) lines.push_back("RyuuKey: \"" + newRyuu + "\"");
+	if (!foundDepotBox) lines.push_back("DepotBoxKey: \"" + newDepotBox + "\"");
 
 
 	std::string tmpPath = configPath + ".tmp";

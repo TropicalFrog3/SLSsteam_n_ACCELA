@@ -655,11 +655,25 @@ namespace StoreInject
                         if (mEnd != std::string::npos)
                         {
                             size_t rStart = mEnd + 6;
+                            // Check for optional &DPBX= before -TS=
+                            size_t dpbxPos = response.find("&DPBX=", rStart);
                             size_t cEnd = response.find("-TS=", rStart);
                             if (cEnd != std::string::npos)
                             {
                                 std::string morr = urlDecode(response.substr(mStart, mEnd - mStart));
-                                std::string ryuu = urlDecode(response.substr(rStart, cEnd - rStart));
+                                std::string ryuu;
+                                std::string dpbx;
+
+                                if (dpbxPos != std::string::npos && dpbxPos < cEnd)
+                                {
+                                    ryuu = urlDecode(response.substr(rStart, dpbxPos - rStart));
+                                    dpbx = urlDecode(response.substr(dpbxPos + 6, cEnd - (dpbxPos + 6)));
+                                }
+                                else
+                                {
+                                    ryuu = urlDecode(response.substr(rStart, cEnd - rStart));
+                                }
+
                                 std::string timestamp = response.substr(cEnd + 4, response.find_first_of("\"", cEnd + 4) - (cEnd + 4));
 
                                 if (timestamp != lastProcessedTimestamp)
@@ -668,7 +682,8 @@ namespace StoreInject
                                     LOG_INFO("API Settings received via CDP UI! Updating config...\n");
                                     if (!morr.empty()) g_config.morrenusKey = morr;
                                     if (!ryuu.empty()) g_config.ryuuKey = ryuu;
-                                    g_config.updateApiAuth(g_config.morrenusKey.get(), g_config.ryuuKey.get());
+                                    if (!dpbx.empty()) g_config.depotBoxKey = dpbx;
+                                    g_config.updateApiAuth(g_config.morrenusKey.get(), g_config.ryuuKey.get(), g_config.depotBoxKey.get());
                                 }
                             }
                         }
@@ -1183,6 +1198,33 @@ namespace StoreInject
                                 std::string idStr = request.substr(idPos + 3, endPos - (idPos + 3));
                                 LOG_INFO("Download Lua clicked for Product ID: %s\n", idStr.c_str());
                             }
+                        }
+                        else if (request.find("/list") != std::string::npos)
+                        {
+                            auto addedApps = g_config.addedAppIds.get();
+                            auto baseApps = g_config.appIds.get();
+                            
+                            std::unordered_set<uint32_t> allApps;
+                            allApps.insert(addedApps.begin(), addedApps.end());
+                            allApps.insert(baseApps.begin(), baseApps.end());
+                            
+                            std::string json = "[";
+                            bool first = true;
+                            for (auto app : allApps) {
+                                if (!first) json += ",";
+                                json += std::to_string(app);
+                                first = false;
+                            }
+                            json += "]";
+                            
+                            std::string response = "HTTP/1.1 200 OK\r\n"
+                                                   "Content-Type: application/json\r\n"
+                                                   "Access-Control-Allow-Origin: *\r\n"
+                                                   "Connection: close\r\n"
+                                                   "Content-Length: " + std::to_string(json.length()) + "\r\n\r\n" + json;
+                            send(new_socket, response.c_str(), response.length(), 0);
+                            close(new_socket);
+                            handled = true;
                         }
                     }
 

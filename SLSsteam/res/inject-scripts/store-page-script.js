@@ -88,6 +88,7 @@
 
         var currentMorr = localStorage.getItem('sls-morr-key') || '%MORR_KEY%';
         var currentRyuu = localStorage.getItem('sls-ryuu-key') || '%RYUU_KEY%';
+        var currentDpbx = localStorage.getItem('sls-dpbx-key') || '%DPBX_KEY%';
 
         var cardHtml = '<div style="background: linear-gradient(145deg, #161920 0%, #0d0f14 100%); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 16px; padding: 28px; width: 440px; box-shadow: 0 20px 50px rgba(0,0,0,0.6); font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, Helvetica, Arial, sans-serif; color: #f5f6f8; transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1); transform: scale(0.95); opacity: 0;" id="sls-modal-card">' +
             '<!-- Title bar -->' +
@@ -115,6 +116,13 @@
                     '</div>' +
                     '<input id="sls-ryuu" type="text" value="' + currentRyuu + '" style="width:100%; box-sizing:border-box; background:#090a0f; border:1px solid rgba(255,255,255,0.08); color:#f5f6f8; padding:10px 14px; border-radius:8px; font-family:monospace; font-size:13px; outline:none; transition: all 0.2s;" placeholder="Optional..."/>' +
                 '</div>' +
+                '<div style="margin-bottom:24px;">' +
+                    '<div style="display:flex; justify-content:space-between; margin-bottom:6px; font-size:12px; font-weight:600; color:#9ca3af;">' +
+                        '<span>DepotBox API Key</span>' +
+                        '<a href="https://depotbox.org/pricing" target="_blank" style="color:#6366f1; text-decoration:none; transition: color 0.2s;">Get Key</a>' +
+                    '</div>' +
+                    '<input id="sls-dpbx" type="text" value="' + currentDpbx + '" style="width:100%; box-sizing:border-box; background:#090a0f; border:1px solid rgba(255,255,255,0.08); color:#f5f6f8; padding:10px 14px; border-radius:8px; font-family:monospace; font-size:13px; outline:none; transition: all 0.2s;" placeholder="Optional..."/>' +
+                '</div>' +
             '</div>' +
             '<!-- Footer Actions -->' +
             '<div style="display:flex; justify-content:flex-end; gap:12px;">' +
@@ -128,7 +136,7 @@
         style.textContent = ' #sls-close-x:hover { background: rgba(255,255,255,0.1) !important; color: #fff !important; }' +
             ' #sls-btn-cancel:hover { background: rgba(255,255,255,0.03) !important; color: #fff !important; border-color: rgba(255,255,255,0.2) !important; }' +
             ' #sls-btn-save:hover { box-shadow: 0 6px 20px rgba(79,70,229,0.45) !important; }' +
-            ' #sls-morr:focus, #sls-ryuu:focus { border-color: #6366f1 !important; box-shadow: 0 0 0 2px rgba(99,102,241,0.2) !important; }';
+            ' #sls-morr:focus, #sls-ryuu:focus, #sls-dpbx:focus { border-color: #6366f1 !important; box-shadow: 0 0 0 2px rgba(99,102,241,0.2) !important; }';
 
         overlay.appendChild(style);
         document.body.appendChild(overlay);
@@ -161,9 +169,11 @@
         saveBtn.onclick = function() {
             var morr = document.getElementById('sls-morr').value;
             var ryuu = document.getElementById('sls-ryuu').value;
+            var dpbx = document.getElementById('sls-dpbx').value;
             localStorage.setItem('sls-morr-key', morr);
             localStorage.setItem('sls-ryuu-key', ryuu);
-            window.location.hash = 'sls-auth-MORR=' + encodeURIComponent(morr) + '&RYUU=' + encodeURIComponent(ryuu) + '-TS=' + Date.now();
+            localStorage.setItem('sls-dpbx-key', dpbx);
+            window.location.hash = 'sls-auth-MORR=' + encodeURIComponent(morr) + '&RYUU=' + encodeURIComponent(ryuu) + '&DPBX=' + encodeURIComponent(dpbx) + '-TS=' + Date.now();
             close();
 
             var toast = document.createElement('div');
