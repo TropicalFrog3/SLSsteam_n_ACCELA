@@ -21,6 +21,11 @@ cp "$SLS_DIR/bin/library-inject.so" "$PROD_SLS_DIR/bin/"
 cp "$SLS_DIR/res/updates.yaml" "$PROD_SLS_DIR/res/"
 cp "$SLS_DIR/res/config.yaml" "$PROD_SLS_DIR/res/"
 cp "$SLS_DIR/res/version" "$PROD_SLS_DIR/res/"
+cp "$SLS_DIR/res/update-all.sh" "$PROD_SLS_DIR/res/"
+cp "$SLS_DIR/setup.sh" "$PROD_SLS_DIR/"
+rm -rf "$PROD_SLS_DIR/tools" "$PROD_SLS_DIR/docs"
+cp -r "$SLS_DIR/tools" "$PROD_SLS_DIR/"
+cp -r "$SLS_DIR/docs" "$PROD_SLS_DIR/"
 
 echo "Updating prod-release for ACCELA..."
 mkdir -p "$PROD_ACCELA_DIR/bin"
@@ -35,4 +40,11 @@ cp -r "$ACCELA_DIR/bin/scripts" "$PROD_ACCELA_DIR/bin/"
 rm -rf "$PROD_ACCELA_DIR/bin/src"
 cp -r "$ACCELA_DIR/bin/src" "$PROD_ACCELA_DIR/bin/"
 
-echo "Prod-release updated successfully!"
+cp "$REPO_ROOT/install.sh" "$REPO_ROOT/prod-release/"
+
+echo "Packaging SLSsteam-n-ACCELA.zip..."
+cd "$REPO_ROOT/prod-release"
+rm -f "$REPO_ROOT/SLSsteam-n-ACCELA.zip"
+zip -q -r "$REPO_ROOT/SLSsteam-n-ACCELA.zip" install.sh SLSsteam ACCELA
+
+echo "Prod-release and SLSsteam-n-ACCELA.zip updated successfully!"

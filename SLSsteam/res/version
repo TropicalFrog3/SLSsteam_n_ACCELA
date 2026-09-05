@@ -1,8 +1,10 @@
 Version: beta-v1.1.4
 Changelog: |
-  This release fixes the post-install update loop and ensures release archives contain the current version manifest.
+  This release adds DepotBox LUA/manifest download provider integration with API key support, fixes the post-install update loop, and ensures release archives contain the current version manifest.
 
   Highlights:
+  - Added DepotBox API provider for direct LUA and manifest downloads with custom timeout and API key settings.
+  - Added DepotBox API key configuration to both SLSsteam config system and store page UI dialog.
   - Keeps the packaged version manifest synchronized with the compiled SLSsteam binary.
   - Only an explicit pending-update marker can start the full post-update installer.
   - Prevented the normal update-all.sh resource from being mistaken for a pending update.
