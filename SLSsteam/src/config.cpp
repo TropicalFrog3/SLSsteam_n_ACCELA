@@ -754,6 +754,22 @@ bool CConfig::updateApiAuth(const std::string& newMorrenus, const std::string& n
 	std::ifstream inFile(configPath);
 	if (!inFile.is_open()) return false;
 
+	const auto quoteYaml = [](const std::string& value) {
+		std::string escaped;
+		escaped.reserve(value.size());
+		for (const char character : value)
+		{
+			if (character == '\\' || character == '"')
+				escaped.push_back('\\');
+			escaped.push_back(character);
+		}
+		return escaped;
+	};
+
+	const std::string morrenus = quoteYaml(newMorrenus);
+	const std::string ryuu = quoteYaml(newRyuu);
+	const std::string depotBox = quoteYaml(newDepotBox);
+
 	std::vector<std::string> lines;
 	std::string line;
 	bool foundMorrenus = false;
@@ -765,17 +781,17 @@ bool CConfig::updateApiAuth(const std::string& newMorrenus, const std::string& n
 	{
 		if (line.find("MorrenusKey:") == 0)
 		{
-			lines.push_back("MorrenusKey: \"" + newMorrenus + "\"");
+			lines.push_back("MorrenusKey: \"" + morrenus + "\"");
 			foundMorrenus = true;
 		}
 		else if (line.find("RyuuKey:") == 0)
 		{
-			lines.push_back("RyuuKey: \"" + newRyuu + "\"");
+			lines.push_back("RyuuKey: \"" + ryuu + "\"");
 			foundRyuu = true;
 		}
 		else if (line.find("DepotBoxKey:") == 0)
 		{
-			lines.push_back("DepotBoxKey: \"" + newDepotBox + "\"");
+			lines.push_back("DepotBoxKey: \"" + depotBox + "\"");
 			foundDepotBox = true;
 		}
 		else if (line.find("RyuuCookies:") == 0)
@@ -789,9 +805,9 @@ bool CConfig::updateApiAuth(const std::string& newMorrenus, const std::string& n
 	}
 	inFile.close();
 
-	if (!foundMorrenus) lines.push_back("MorrenusKey: \"" + newMorrenus + "\"");
-	if (!foundRyuu) lines.push_back("RyuuKey: \"" + newRyuu + "\"");
-	if (!foundDepotBox) lines.push_back("DepotBoxKey: \"" + newDepotBox + "\"");
+	if (!foundMorrenus) lines.push_back("MorrenusKey: \"" + morrenus + "\"");
+	if (!foundRyuu) lines.push_back("RyuuKey: \"" + ryuu + "\"");
+	if (!foundDepotBox) lines.push_back("DepotBoxKey: \"" + depotBox + "\"");
 
 
 	std::string tmpPath = configPath + ".tmp";
