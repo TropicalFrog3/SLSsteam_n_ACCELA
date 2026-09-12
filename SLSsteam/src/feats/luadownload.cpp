@@ -3,6 +3,9 @@
 #include "../config.hpp"
 #include "../log.hpp"
 #include "../globals.hpp"
+#include "../CppAccela/accelapath.hpp"
+#include "../CppAccela/accelazip.hpp"
+#include "../CppAccela/accelaluaparser.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -16,8 +19,6 @@
 #include <vector>
 
 #include <curl/curl.h>
-#include <sys/wait.h>
-#include <unistd.h>
 
 namespace LuaDownload
 {
@@ -122,23 +123,11 @@ namespace LuaDownload
 
     // ── Steam path detection ───────────────────────────────────────────
 
+    // Delegates to CppAccela::Path — single source of truth for Steam root
+    // detection shared across the whole CppAccela module.
     std::string findSteamRoot()
     {
-        const char* home = getenv("HOME");
-        if (!home) return {};
-
-        std::filesystem::path candidates[] = {
-            std::filesystem::path(home) / ".local" / "share" / "Steam",
-            std::filesystem::path(home) / ".steam" / "steam",
-            std::filesystem::path(home) / ".var" / "app" / "com.valvesoftware.Steam" / "data" / "Steam",
-        };
-
-        for (auto& path : candidates)
-        {
-            if (std::filesystem::exists(path / "steamui"))
-                return path.string();
-        }
-        return {};
+        return CppAccela::Path::findSteamRoot();
     }
 
     // ── libcurl helpers ────────────────────────────────────────────────
@@ -224,93 +213,30 @@ namespace LuaDownload
 
     // ── ZIP validation ─────────────────────────────────────────────────
 
+    // Delegates to CppAccela::Zip — single implementation, no duplication.
     static bool isValidZip(const std::string& path)
     {
-        FILE* fp = fopen(path.c_str(), "rb");
-        if (!fp) return false;
-
-        unsigned char magic[4] = {};
-        size_t read = fread(magic, 1, 4, fp);
-        fclose(fp);
-
-        if (read < 4) return false;
-
-        // PK\x03\x04 (normal), PK\x05\x06 (empty), PK\x07\x08 (spanned)
-        return (magic[0] == 'P' && magic[1] == 'K' &&
-                (magic[2] == 0x03 || magic[2] == 0x05 || magic[2] == 0x07));
+        return CppAccela::Zip::isValid(path);
     }
 
     // ── ZIP extraction ─────────────────────────────────────────────────
 
-    /**
-     * Extract a zip file to a directory using the unzip CLI.
-     * Returns true on success.
-     */
+    // Delegates to CppAccela::Zip::extract.
     static bool extractZip(const std::string& zipPath, const std::string& destDir)
     {
-        std::filesystem::create_directories(destDir);
-
-        // Use fork/exec instead of system() to avoid shell injection
-        pid_t pid = fork();
-        if (pid < 0)
-        {
-            LOG_DEBUG("LuaDownload: fork() failed for unzip of %s\n", zipPath.c_str());
-            return false;
-        }
-
-        if (pid == 0)
-        {
-            // Child process: execlp unzip with arguments
-            // unzip -o -q "<zipPath>" -d "<destDir>"
-            execlp("unzip", "unzip", "-o", "-q", zipPath.c_str(), "-d", destDir.c_str(), nullptr);
-            // If execlp fails
-            _exit(127);
-        }
-
-        int status = 0;
-        if (waitpid(pid, &status, 0) < 0)
-        {
-            LOG_DEBUG("LuaDownload: waitpid() failed for unzip of %s\n", zipPath.c_str());
-            return false;
-        }
-
-        if (!WIFEXITED(status)) return false;
-        return WEXITSTATUS(status) == 0;
+        return CppAccela::Zip::extract(zipPath, destDir);
     }
 
     // ── File discovery in extracted zip ────────────────────────────────
 
-    struct ExtractedFiles
+    // Re-use CppAccela::Zip::ExtractedFiles via a local alias so the rest
+    // of this file can keep using the old struct name unchanged.
+    using ExtractedFiles = CppAccela::Zip::ExtractedFiles;
+
+    static ExtractedFiles findExtractedFiles(const std::string& extractDir,
+                                             const std::string& appId)
     {
-        std::string luaFile;                    // Path to {appid}.lua
-        std::vector<std::string> manifestFiles; // Paths to *.manifest
-    };
-
-    /**
-     * Recursively search the extract directory for the .lua and .manifest files.
-     */
-    static ExtractedFiles findExtractedFiles(const std::string& extractDir, const std::string& appId)
-    {
-        ExtractedFiles result;
-        std::string expectedLua = appId + ".lua";
-
-        for (auto& entry : std::filesystem::recursive_directory_iterator(extractDir))
-        {
-            if (!entry.is_regular_file()) continue;
-
-            std::string filename = entry.path().filename().string();
-
-            if (filename == expectedLua)
-            {
-                result.luaFile = entry.path().string();
-            }
-            else if (filename.size() > 9 && filename.substr(filename.size() - 9) == ".manifest")
-            {
-                result.manifestFiles.push_back(entry.path().string());
-            }
-        }
-
-        return result;
+        return CppAccela::Zip::findFiles(extractDir, appId);
     }
 
     // ── Main download & install ────────────────────────────────────────
@@ -331,19 +257,44 @@ namespace LuaDownload
         }
         LOG_DEBUG("LuaDownload: Steam root: %s\n", steamRoot.c_str());
 
-        // Prepare paths
-        std::string stplugDir = steamRoot + "/config/stplug-in";
-        std::string depotcacheDir = steamRoot + "/config/depotcache";
-        std::filesystem::create_directories(stplugDir);
-        std::filesystem::create_directories(depotcacheDir);
+        // Prepare paths — delegated to CppAccela::Path (creates dirs if absent)
+        std::string stplugDir    = CppAccela::Path::stplugDir();
+        std::string depotcacheDir = CppAccela::Path::depotcacheDir();
+
+        if (stplugDir.empty() || depotcacheDir.empty())
+        {
+            LOG_INFO("LuaDownload: failed to resolve Steam config directories\n");
+            pushStatus(appId, "Steam not found", "hue-rotate(0deg) brightness(1.0)");
+            return false;
+        }
 
         // Check if already installed
         std::string existingLua = stplugDir + "/" + appId + ".lua";
         if (std::filesystem::exists(existingLua))
         {
-            LOG_INFO("LuaDownload: Lua script already exists for appid=%s, skipping\n", appId.c_str());
-            pushStatus(appId, "Already installed", "hue-rotate(110deg) brightness(1.2)");
-            return true;
+            // Verify the lua actually contains addappid(<appId>) — a lua from a
+            // previous partial/mismatched install won't, and the config scanner
+            // will mark it stale.  If it's bad, delete it and re-download.
+            bool luaValid = false;
+            {
+                std::ifstream luaFile(existingLua);
+                if (luaFile.is_open())
+                {
+                    std::string content((std::istreambuf_iterator<char>(luaFile)),
+                                         std::istreambuf_iterator<char>());
+                    luaValid = content.find("addappid(" + appId + ")") != std::string::npos;
+                }
+            }
+
+            if (luaValid)
+            {
+                LOG_INFO("LuaDownload: Lua script already exists for appid=%s, skipping\n", appId.c_str());
+                pushStatus(appId, "Already installed", "hue-rotate(110deg) brightness(1.2)");
+                return true;
+            }
+
+            LOG_INFO("LuaDownload: Existing lua for appid=%s is invalid/mismatched, re-downloading\n", appId.c_str());
+            std::filesystem::remove(existingLua);
         }
 
         // Temp directory for this download
@@ -502,6 +453,20 @@ namespace LuaDownload
 
         LOG_INFO("LuaDownload: Found lua: %s, manifests: %zu\n",
                       files.luaFile.c_str(), files.manifestFiles.size());
+
+        // Validate the Lua file — must have at least one manifest
+        {
+            auto luaData = CppAccela::LuaParser::parseFile(files.luaFile);
+            if (!luaData.valid || luaData.manifests.empty())
+            {
+                LOG_INFO("LuaDownload: Lua file has no valid manifests (via %s) — unusable\n",
+                         successApi.c_str());
+                std::filesystem::remove_all(extractDir);
+                std::filesystem::remove(zipPath);
+                pushStatus(appId, "Invalid Lua (no manifests)", "hue-rotate(0deg) brightness(1.0)");
+                return false;
+            }
+        }
 
         pushStatus(appId, "Installing...");
 

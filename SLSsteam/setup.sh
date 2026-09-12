@@ -9,6 +9,26 @@ FLATPAK_APP_ID="com.valvesoftware.Steam"
 FLATPAK_SLSDIR="$HOME/.var/app/$FLATPAK_APP_ID/.local/share/SLSsteam"
 FLATPAK_LD_AUDIT="/app/links/\$LIB/libshared-library-guard.so:$FLATPAK_SLSDIR/library-inject.so:$FLATPAK_SLSDIR/SLSsteam.so"
 
+smart_copy() {
+	local src_dir="$1"
+	local dest_dir="$2"
+
+	for src_path in "$src_dir"/*; do
+		[ -e "$src_path" ] || continue
+		local item_name="$(basename "$src_path")"
+		local dest_path="$dest_dir/$item_name"
+
+		if [ -d "$src_path" ]; then
+			mkdir -p "$dest_path"
+			smart_copy "$src_path" "$dest_path" || return 1
+		else
+			if ! cmp -s "$src_path" "$dest_path"; then
+				cp -d --remove-destination -v "$src_path" "$dest_path" || return 1
+			fi
+		fi
+	done
+}
+
 uninstall()
 {
 	test -f "$SLSDIR/steam-jupiter.bak" && sudo cp -v "$SLSDIR/steam-jupiter.bak" "$(realpath "$(type -P steam-jupiter)")" #Left over from Steam Deck patcher
@@ -134,9 +154,61 @@ install_slssteam()
 		fi
 	fi
 
-	cp -v ./bin/* "$SLSDIR/" || return 1
+	smart_copy ./bin "$SLSDIR" || return 1
 	mkdir -p "$SLSDIR/res"
-	cp -rv ./res/* "$SLSDIR/res/" || return 1
+	smart_copy ./res "$SLSDIR/res" || return 1
+
+	# Bundle ACCELA deps (DepotDownloaderMod + .NET dependencies) if found
+	# in adjacent ACCELA directories or installed ACCELA location.
+	# These are required for accela-helper to download game files.
+	ACCELA_DEPS_SRC=""
+	for accela_dir in ../ACCELA-*/bin/src/deps ../ACCELA/bin/src/deps; do
+		if [ -f "$accela_dir/DepotDownloaderMod.dll" ]; then
+			ACCELA_DEPS_SRC="$accela_dir"
+			break
+		fi
+	done
+	# Fallback: check installed ACCELA location
+	if [ -z "$ACCELA_DEPS_SRC" ] && [ -f "$HOME/.local/share/ACCELA/src/deps/DepotDownloaderMod.dll" ]; then
+		ACCELA_DEPS_SRC="$HOME/.local/share/ACCELA/src/deps"
+	fi
+
+	if [ -n "$ACCELA_DEPS_SRC" ]; then
+		mkdir -p "$SLSDIR/deps"
+
+		# Core DepotDownloaderMod engine + .NET config
+		for f in DepotDownloaderMod.dll DepotDownloaderMod.deps.json DepotDownloaderMod.runtimeconfig.json; do
+			[ -f "$ACCELA_DEPS_SRC/$f" ] && cp -f "$ACCELA_DEPS_SRC/$f" "$SLSDIR/deps/"
+		done
+
+		# .NET dependency DLLs required by DepotDownloaderMod
+		for f in SteamKit2.dll protobuf-net.dll protobuf-net.Core.dll \
+		         System.IO.Hashing.dll ZstdSharp.dll QRCoder.dll; do
+			[ -f "$ACCELA_DEPS_SRC/$f" ] && cp -f "$ACCELA_DEPS_SRC/$f" "$SLSDIR/deps/"
+		done
+
+		# Steam config override
+		[ -f "$ACCELA_DEPS_SRC/steam.cfg" ] && cp -f "$ACCELA_DEPS_SRC/steam.cfg" "$SLSDIR/deps/"
+
+		# Goldberg emulator files (needed for offline play)
+		if [ -d "$ACCELA_DEPS_SRC/Goldberg" ]; then
+			cp -rpf "$ACCELA_DEPS_SRC/Goldberg" "$SLSDIR/deps/"
+		fi
+
+		# Steamless unpacker (needed to remove DRM)
+		if [ -d "$ACCELA_DEPS_SRC/Steamless" ]; then
+			cp -rpf "$ACCELA_DEPS_SRC/Steamless" "$SLSDIR/deps/"
+		fi
+
+		# SLScheevo achievement handler
+		if [ -d "$ACCELA_DEPS_SRC/SLScheevo" ]; then
+			cp -rpf "$ACCELA_DEPS_SRC/SLScheevo" "$SLSDIR/deps/"
+		fi
+
+		echo "Bundled ACCELA deps into $SLSDIR/deps"
+	else
+		echo "WARNING: ACCELA deps not found — accela-helper downloads will not work"
+	fi
 }
 
 install_flatpak()
@@ -164,9 +236,9 @@ install_flatpak()
 		fi
 	fi
 
-	cp -v ./bin/* "$FLATPAK_SLSDIR/"
+	smart_copy ./bin "$FLATPAK_SLSDIR"
 	mkdir -p "$FLATPAK_SLSDIR/res"
-	cp -rv ./res/* "$FLATPAK_SLSDIR/res/"
+	smart_copy ./res "$FLATPAK_SLSDIR/res"
 
 	flatpak override --user --env=LD_AUDIT="$FLATPAK_LD_AUDIT" --env=SHARED_LIBRARY_GUARD=0 "$FLATPAK_APP_ID"
 

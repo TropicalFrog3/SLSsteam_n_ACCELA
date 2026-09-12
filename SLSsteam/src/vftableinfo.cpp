@@ -183,6 +183,11 @@ namespace VFTIndexes
 			"20IClientAppManagerMap",
 			"InstallApp"
 		};
+		VFTableInfo_t ChangeAppDownloadQueuePlacement
+		{
+			"20IClientAppManagerMap",
+			"ChangeAppDownloadQueuePlacement"
+		};
 		VFTableInfo_t IsAppDlcInstalled
 		{
 			"20IClientAppManagerMap",

@@ -101,14 +101,6 @@ class DepotSelectionMenu(BaseTextMenu):
         self.selected_depots = set()
         self.checkboxes = {}
 
-        # Auto-skip when only one depot is available
-        if len(self.depots) == 1:
-            depot_id = list(self.depots.keys())[0]
-            depot_desc = self.depots[depot_id].get('desc', 'Unknown')
-            self.selected_depots = {depot_id}
-            self.result = [depot_id]
-            logger.info(f"Auto-selected single depot: {depot_id} - {depot_desc}")
-
     def _build_menu(self):
         """Build the depot selection menu."""
         sorted_depots = self._sort_depots()
@@ -131,8 +123,8 @@ class DepotSelectionMenu(BaseTextMenu):
         header = self._create_header()
 
         instructions = (
-            "↑/↓: Navigate  Space: Toggle  "
-            "A: All  D: None  Q: Cancel"
+            "Select the content depots to install, then confirm.  "
+            "↑/↓: Navigate  Space: Toggle  A: All  D: None  Q: Cancel"
         )
         footer = self._create_footer(instructions)
 
@@ -150,7 +142,7 @@ class DepotSelectionMenu(BaseTextMenu):
 
     def _create_depot_item(self, depot_id: str, depot_data: dict):
         """Create a depot item widget using CheckBox."""
-        desc = depot_data.get('desc', f'Depot {depot_id}')
+        desc = depot_data.get('desc') or 'Description unavailable'
         size = depot_data.get('size')
 
         size_str = ""
@@ -159,11 +151,19 @@ class DepotSelectionMenu(BaseTextMenu):
                 size_bytes = int(size)
                 if size_bytes > 0:
                     size_gb = size_bytes / (1024 ** 3)
-                    size_str = f" <{size_gb:.2f} GB>"
+                    size_str = f" | Size: {size_gb:.2f} GB"
             except (ValueError, TypeError):
                 pass
 
-        item_text = f"{depot_id} - {desc}{size_str}"
+        details = []
+        os_name = depot_data.get('oslist')
+        language = depot_data.get('language')
+        if os_name:
+            details.append(f"OS: {os_name.upper()}")
+        if language:
+            details.append(f"Language: {language.capitalize()}")
+        detail_str = f" | {' | '.join(details)}" if details else ""
+        item_text = f"Depot {depot_id}: {desc}{detail_str}{size_str}"
         checked = depot_id in self.selected_depots
 
         checkbox = urwid.CheckBox(

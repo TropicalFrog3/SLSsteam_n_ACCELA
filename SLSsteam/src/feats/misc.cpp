@@ -90,11 +90,11 @@ void Misc::recvMsg(CNetPacket *pkt)
 		case k_EMsgClientPICSProductInfoResponse:
 		{
 			auto msg = pkt->deserializeBody<CMsgClientPICSProductInfoResponse>();
-			LOG_INFO("PICS Response: meta_data_only=%d, http_host=%s\n", msg.meta_data_only(), msg.http_host().c_str());
+			// LOG_INFO("PICS Response: meta_data_only=%d, http_host=%s\n", msg.meta_data_only(), msg.http_host().c_str());
 			for (int i = 0; i < msg.apps_size(); i++)
 			{
 				auto* app = msg.mutable_apps(i);
-				LOG_INFO("Got PICS info for %u, has_buffer: %d\n", app->appid(), app->has_buffer());
+				// LOG_INFO("Got PICS info for %u, has_buffer: %d\n", app->appid(), app->has_buffer());
 				if (app->has_buffer())
 				{
 					std::string path = "/tmp/pics_" + std::to_string(app->appid()) + ".bin";

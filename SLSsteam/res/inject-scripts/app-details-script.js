@@ -70,20 +70,23 @@
     }
 
     var noLuaAppIds = {};
-    var pendingChecks = {};
+    var pendingChecks = {}; // keyed by appid + '_' + container-random-key
 
     function checkAndCreateButton(manageContainer, appid, retryCount) {
         if (!retryCount) retryCount = 0;
 
+        var parentNode = manageContainer.parentNode;
+        var containerKey = appid + '_' + (parentNode ? parentNode.dataset.slsKey : appid);
+
         if (retryCount > 5) {
-            delete pendingChecks[appid];
+            delete pendingChecks[containerKey];
             return;
         }
 
         fetch('http://127.0.0.1:9001/check?id=' + appid)
             .then(function(r) { return r.json(); })
             .then(function(data) {
-                delete pendingChecks[appid];
+                delete pendingChecks[containerKey];
 
                 if (data.exists || data.pending) {
                     createRemoveButton(manageContainer, appid, data.pending, data.onlineFixInstalled, data.autoCrackInstalled);
@@ -98,7 +101,7 @@
                     if (manageContainer.parentNode) {
                         checkAndCreateButton(manageContainer, appid, retryCount + 1);
                     } else {
-                        delete pendingChecks[appid];
+                        delete pendingChecks[containerKey];
                     }
                 }, delay);
             });
@@ -254,41 +257,11 @@
 
     function createRemoveButton(manageContainer, appid, isPending, onlineFixInstalled, autoCrackInstalled) {
         var parentNode = manageContainer.parentNode;
-        var existingBtn = null;
-        var existingConfigBtn = null;
-        var existingFixInstallBtn = null;
-        var sibling = manageContainer.nextSibling;
-        while (sibling) {
-            if (sibling.classList) {
-                if (sibling.classList.contains('sls-remove-lua-btn')) {
-                    existingBtn = sibling;
-                } else if (sibling.classList.contains('sls-config-btn')) {
-                    existingConfigBtn = sibling;
-                } else if (sibling.classList.contains('sls-fix-install-btn')) {
-                    existingFixInstallBtn = sibling;
-                } else {
-                    if (sibling.classList.contains('sls-verify-btn') || 
-                        sibling.classList.contains('sls-fix-btn') || 
-                        sibling.classList.contains('sls-crack-btn')) {
-                        var toRemove = sibling;
-                        sibling = sibling.nextSibling;
-                        toRemove.remove();
-                        continue;
-                    }
-                }
-            }
-            sibling = sibling.nextSibling;
-        }
 
-        if (existingBtn) {
-            existingBtn.remove();
-        }
-        if (existingConfigBtn) {
-            existingConfigBtn.remove();
-        }
-        if (existingFixInstallBtn) {
-            existingFixInstallBtn.remove();
-        }
+        // Remove any existing SLS buttons from this container before re-inserting
+        parentNode.querySelectorAll(
+            '.sls-remove-lua-btn, .sls-config-btn, .sls-fix-install-btn'
+        ).forEach(function(el) { el.remove(); });
 
         // 1. Remove Lua Button
         var removeBtn = document.createElement('div');
@@ -442,9 +415,17 @@
             };
         };
 
-        parentNode.insertBefore(removeBtn, manageContainer.nextSibling);
-        parentNode.insertBefore(configBtn, removeBtn.nextSibling);
-        parentNode.insertBefore(fixInstallBtn, configBtn.nextSibling);
+        // Mark this container as injected BEFORE inserting DOM nodes so the
+        // MutationObserver callback that fires during insertion sees the guard
+        // already set and skips re-entry.
+        parentNode.dataset.slsInjected = appid;
+
+        // Insert SLS buttons BEFORE the Manage gear (manageContainer),
+        // so they appear first in the row. Reverse insertion order keeps
+        // visual order: Remove Lua → Config → Fix Install.
+        parentNode.insertBefore(fixInstallBtn, parentNode.firstChild);
+        parentNode.insertBefore(configBtn, parentNode.firstChild);
+        parentNode.insertBefore(removeBtn, parentNode.firstChild);
     }
 
     function addRemoveLuaButton() {
@@ -457,34 +438,18 @@
             var appid = extractAppId(manageBtn);
             if (!appid) return;
 
-            // If buttons already exist for this appid on this container, skip
             var parentNode = manageContainer.parentNode;
-            var existingBtn = null;
-            var existingConfigBtn = null;
-            var existingFixInstallBtn = null;
-            var sibling = manageContainer.nextSibling;
-            while (sibling) {
-                if (sibling.classList) {
-                    if (sibling.classList.contains('sls-remove-lua-btn')) {
-                        existingBtn = sibling;
-                    } else if (sibling.classList.contains('sls-config-btn')) {
-                        existingConfigBtn = sibling;
-                    } else if (sibling.classList.contains('sls-fix-install-btn')) {
-                        existingFixInstallBtn = sibling;
-                    }
-                }
-                sibling = sibling.nextSibling;
-            }
-            if (existingBtn && existingConfigBtn && existingFixInstallBtn && existingBtn.dataset.slsAppId == appid) {
-                return;
-            }
+
+            // If this exact container is already injected for this appid, skip
+            if (parentNode.dataset.slsInjected === appid) return;
 
             // If we already confirmed this appid has NO lua, skip
             if (noLuaAppIds[appid]) return;
 
-            // If a /check is already in-flight for this appid, skip (prevents double requests)
-            if (pendingChecks[appid]) return;
-            pendingChecks[appid] = true;
+            // If a /check is already in-flight for this appid+container, skip
+            var containerKey = appid + '_' + (parentNode.dataset.slsKey || (parentNode.dataset.slsKey = Math.random().toString(36).slice(2)));
+            if (pendingChecks[containerKey]) return;
+            pendingChecks[containerKey] = true;
 
             checkAndCreateButton(manageContainer, appid, 0);
         });

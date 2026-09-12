@@ -47,8 +47,32 @@ SLSSTEAMSO := bin/SLSsteam-$(FLAGSSHA).so
 objs := $(srcs:src/%.cpp=obj/$(FLAGSSHA)/%.o)
 deps := $(objs:%.o=%.d)
 
+# accela-helper: standalone binary exec()'d after fork() to avoid
+# multithreading deadlocks. Must be built as a 32-bit executable to
+# match the SLSsteam.so library it links against.
+HELPER_SRCS := \
+	src/CppAccela/accela-helper.cpp \
+	src/CppAccela/accelapath.cpp \
+	src/CppAccela/accelamanifest.cpp \
+	src/CppAccela/accelaluaparser.cpp \
+	src/CppAccela/acceladepotdownloader.cpp \
+	src/CppAccela/accelapostprocess.cpp \
+	src/curl.cpp
+
+HELPER_OBJS := $(patsubst src/%.cpp,obj/$(FLAGSSHA)/%.o,$(HELPER_SRCS))
+HELPER_DEPS := $(HELPER_OBJS:%.o=%.d)
+HELPER_LDFLAGS := $(shell pkg-config --libs "openssl")
+HELPER_LDFLAGS += $(shell pkg-config --libs "libcurl")
+
+bin/accela-helper: $(HELPER_OBJS)
+	@mkdir -p bin
+	$(CXX) $(CXXFLAGS) $^ -o $@ $(HELPER_LDFLAGS)
+	chmod 755 $@
+
+-include $(HELPER_DEPS)
+
 audit-libs:
-	$(MAKE) -j $(JOBS) $(SLSSTEAMSO) bin/library-inject.so
+	$(MAKE) -j $(JOBS) $(SLSSTEAMSO) bin/library-inject.so bin/accela-helper
 	$(MAKE) link-bins
 
 tools:
@@ -80,13 +104,11 @@ obj/$(FLAGSSHA)/update.o: src/update.cpp res/version
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -isysteminclude -MMD -MP -c $< -o $@
 
--include $(deps)
 obj/$(FLAGSSHA)/config.o: src/config.cpp res/config.yaml
 	$(shell ./embed-config.sh)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -isysteminclude -MMD -MP -c $< -o $@
 
--include $(deps)
 obj/$(FLAGSSHA)/%.o : src/%.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -isysteminclude -MMD -MP -c $< -o $@

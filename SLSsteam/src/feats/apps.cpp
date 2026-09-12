@@ -15,7 +15,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
-#include <sstream>
 #include <string>
 
 
@@ -198,9 +197,137 @@ static void reloadAppsJson()
     parseJsonArray(content, "autocrack", Apps::autoCrackApps);
 }
 
+// Forward declaration — defined below, after the VDF parse helpers.
+static std::vector<std::filesystem::path> getSteamLibraryPaths();
+
+// Patch ACF files that were previously written with StateFlags=6 (installed +
+// update_required) by CppAccela or the Python ACCELA path. The "update required"
+// bit (2) causes Steam to show the game as needing an update and failing with
+// "content still encrypted" when the user tries to update.
+//
+// We scan ALL appmanifest_*.acf files in every Steam library folder and patch any
+// that have both StateFlags="6" AND buildid="0" — the signature of an
+// ACCELA-generated ACF.  Apps patched this way are also auto-added to the
+// installedApps tracking list so the runtime hooks protect them going forward.
+static void patchExistingAcfStateFlags()
+{
+    auto libraryPaths = getSteamLibraryPaths();
+    if (libraryPaths.empty()) return;
+
+    int patched = 0;
+    bool listChanged = false;
+
+    for (auto& libPath : libraryPaths)
+    {
+        std::error_code dirEc;
+        for (auto& entry : std::filesystem::directory_iterator(libPath, dirEc))
+        {
+            if (!entry.is_regular_file()) continue;
+
+            const std::string filename = entry.path().filename().string();
+            if (filename.rfind("appmanifest_", 0) != 0) continue;
+            if (filename.find(".acf") == std::string::npos) continue;
+
+            // Read the entire ACF
+            std::string content;
+            {
+                std::ifstream f(entry.path());
+                if (!f.is_open()) continue;
+                std::ostringstream ss;
+                ss << f.rdbuf();
+                content = ss.str();
+            }
+
+            // Only patch ACFs that have StateFlags "6"
+            // The KeyValues format uses tabs: "StateFlags"\t\t"6"
+            // But Steam may also re-format with varying whitespace, so we
+            // use a regex-free approach: find "StateFlags" then extract value.
+            const std::string sfKey = "\"StateFlags\"";
+            size_t sfPos = content.find(sfKey);
+            if (sfPos == std::string::npos) continue;
+
+            // Find the value: skip whitespace after key, find opening quote
+            size_t afterKey = sfPos + sfKey.size();
+            size_t valOpen = content.find('"', afterKey);
+            if (valOpen == std::string::npos) continue;
+            size_t valClose = content.find('"', valOpen + 1);
+            if (valClose == std::string::npos) continue;
+
+            std::string sfValue = content.substr(valOpen + 1, valClose - valOpen - 1);
+            if (sfValue != "6") continue;
+
+            // Confirm this is an ACCELA ACF by checking buildid="0"
+            // (Steam-owned installs always have a nonzero buildid)
+            const std::string bidKey = "\"buildid\"";
+            size_t bidPos = content.find(bidKey);
+            if (bidPos != std::string::npos)
+            {
+                size_t bidValOpen = content.find('"', bidPos + bidKey.size());
+                if (bidValOpen != std::string::npos)
+                {
+                    size_t bidValClose = content.find('"', bidValOpen + 1);
+                    if (bidValClose != std::string::npos)
+                    {
+                        std::string bidValue = content.substr(bidValOpen + 1, bidValClose - bidValOpen - 1);
+                        if (bidValue != "0" && bidValue != "999999999") continue; // Not an ACCELA ACF
+                    }
+                }
+            }
+
+            // Replace the StateFlags value from "6" to "4"
+            content.replace(valOpen + 1, valClose - valOpen - 1, "4");
+
+            // Atomic write: tmp then rename
+            std::string tmpPath = entry.path().string() + ".tmp";
+            {
+                std::ofstream out(tmpPath, std::ios::trunc);
+                if (!out.is_open()) continue;
+                out << content;
+            }
+
+            std::error_code ec;
+            std::filesystem::rename(tmpPath, entry.path(), ec);
+            if (ec)
+            {
+                std::filesystem::remove(tmpPath, ec);
+                continue;
+            }
+
+            // Extract appId from filename: appmanifest_<appId>.acf
+            uint32_t appId = 0;
+            try
+            {
+                std::string idStr = filename.substr(12); // skip "appmanifest_"
+                idStr = idStr.substr(0, idStr.find('.')); // strip ".acf"
+                appId = std::stoul(idStr);
+            }
+            catch (...) {}
+
+            LOG_INFO("Patched ACF StateFlags 6->4 for appId %u: %s\n",
+                     appId, entry.path().string().c_str());
+            ++patched;
+
+            // Auto-add to installed tracking if not already tracked
+            if (appId && !Apps::installedApps.contains(appId))
+            {
+                Apps::installedApps.insert(appId);
+                listChanged = true;
+                LOG_INFO("Auto-added appId %u to installed tracking\n", appId);
+            }
+        }
+    }
+
+    if (listChanged)
+        saveAppsJson();
+
+    if (patched > 0)
+        LOG_INFO("Patched %d existing ACF(s) from StateFlags=6 to StateFlags=4\n", patched);
+}
+
 void Apps::init()
 {
     reloadAppsJson();
+    patchExistingAcfStateFlags();
 }
 
 bool Apps::isInstalled(uint32_t appId)
@@ -389,38 +516,138 @@ bool Apps::gameFilesExist(uint32_t appId)
     for (auto& libPath : libraryPaths)
     {
         auto manifestPath = libPath / manifestName;
-        if (std::filesystem::exists(manifestPath))
+        if (!std::filesystem::exists(manifestPath))
+            continue;
+
+        LOG_INFO("Found manifest: %s\n", manifestPath.string().c_str());
+
+        // Parse the ACF manifest for install state fields.
+        // ACCELA writes these fields after a successful download:
+        //   StateFlags  – bitmask: bit 1=invalid, bit 2=installed, bit 32=missing
+        //   installdir  – folder name under steamapps/common/
+        //   SizeOnDisk  – total bytes written (0 means nothing was downloaded)
+        //   InstalledDepots – at least one depot entry means the download completed
+        std::ifstream manifest(manifestPath);
+        std::string line;
+        std::string installDir;
+        std::string stateFlagsStr;
+        std::string sizeOnDiskStr;
+        bool hasInstalledDepots = false;
+
+        while (std::getline(manifest, line))
         {
-            LOG_INFO("Found manifest: %s\n", manifestPath.c_str());
-
-            // Parse installdir from the manifest
-            std::ifstream manifest(manifestPath);
-            std::string line;
-            std::string installDir;
-            while (std::getline(manifest, line))
+            // Helper lambda: extract the quoted value from a KeyValues line.
+            auto extractValue = [&](const std::string& key) -> std::string
             {
-                if (line.find("\"installdir\"") == std::string::npos) continue;
+                if (line.find(key) == std::string::npos) return {};
+                auto last = line.rfind('"');
+                if (last == std::string::npos) return {};
+                auto prev = line.rfind('"', last - 1);
+                if (prev == std::string::npos || prev == last) return {};
+                return line.substr(prev + 1, last - prev - 1);
+            };
 
-                auto lastQuote = line.rfind('"');
-                if (lastQuote == std::string::npos) continue;
-                auto secondLastQuote = line.rfind('"', lastQuote - 1);
-                if (secondLastQuote == std::string::npos) continue;
-
-                installDir = line.substr(secondLastQuote + 1, lastQuote - secondLastQuote - 1);
-                break;
+            if (installDir.empty())
+            {
+                auto v = extractValue("\"installdir\"");
+                if (!v.empty()) { installDir = v; continue; }
             }
-            manifest.close();
-
-            if (!installDir.empty())
+            if (stateFlagsStr.empty())
             {
-                auto gamePath = libPath / "common" / installDir;
-                if (std::filesystem::exists(gamePath))
-                {
-                    LOG_INFO("Game directory exists: %s\n", gamePath.c_str());
-                    return true;
-                }
+                auto v = extractValue("\"StateFlags\"");
+                if (!v.empty()) { stateFlagsStr = v; continue; }
+            }
+            if (sizeOnDiskStr.empty())
+            {
+                auto v = extractValue("\"SizeOnDisk\"");
+                if (!v.empty()) { sizeOnDiskStr = v; continue; }
+            }
+            if (!hasInstalledDepots && line.find("\"InstalledDepots\"") != std::string::npos)
+            {
+                hasInstalledDepots = true;
             }
         }
+        manifest.close();
+
+        // --- StateFlags check ---
+        // Steam EAppState bitmask (from Steam SDK / community research):
+        //   1  = Uninstalled
+        //   2  = Update required (not an error — game is still playable)
+        //   4  = Fully installed  ← the bit we require
+        //   8  = Awaiting update
+        //   16 = Downloading
+        //   32 = Staging
+        //   64 = Committed
+        // ACCELA's CppAccela path writes StateFlags=4 (fully installed, no pending update).
+        // ACCELA's Python path writes StateFlags=4 (fully installed, no pending update).
+        // A plain Steam-owned install also shows StateFlags=4.
+        // Reject only if the installed bit (4) is absent.
+        if (!stateFlagsStr.empty())
+        {
+            try
+            {
+                unsigned long flags = std::stoul(stateFlagsStr);
+                constexpr unsigned long FLAG_FULLY_INSTALLED = 4;
+                if (!(flags & FLAG_FULLY_INSTALLED))
+                {
+                    LOG_INFO("gameFilesExist(%u): StateFlags=%lu — fully-installed bit not set, skipping\n",
+                             appId, flags);
+                    continue;
+                }
+            }
+            catch (...) { /* malformed value; proceed with remaining checks */ }
+        }
+
+        // --- InstalledDepots check ---
+        // ACCELA populates InstalledDepots with one entry per downloaded depot.
+        // An empty block means no depot completed successfully.
+        if (!hasInstalledDepots)
+        {
+            LOG_INFO("gameFilesExist(%u): no InstalledDepots section in manifest\n", appId);
+            continue;
+        }
+
+        // --- Physical directory + contents check ---
+        if (installDir.empty())
+        {
+            LOG_WARN("gameFilesExist(%u): could not parse installdir from manifest\n", appId);
+            continue;
+        }
+
+        auto gamePath = libPath / "common" / installDir;
+        if (!std::filesystem::exists(gamePath))
+        {
+            LOG_INFO("gameFilesExist(%u): game directory missing: %s\n",
+                     appId, gamePath.string().c_str());
+            continue;
+        }
+
+        // Confirm the directory actually contains files (not just an empty folder).
+        bool hasFiles = false;
+        std::error_code ec;
+        for (auto& entry : std::filesystem::recursive_directory_iterator(gamePath,
+                 std::filesystem::directory_options::skip_permission_denied, ec))
+        {
+            if (entry.is_regular_file(ec))
+            {
+                hasFiles = true;
+                break;
+            }
+        }
+
+        if (!hasFiles)
+        {
+            LOG_INFO("gameFilesExist(%u): game directory exists but is empty: %s\n",
+                     appId, gamePath.string().c_str());
+            continue;
+        }
+
+        LOG_INFO("gameFilesExist(%u): verified — StateFlags=%s, SizeOnDisk=%s, path=%s\n",
+                 appId,
+                 stateFlagsStr.empty() ? "?" : stateFlagsStr.c_str(),
+                 sizeOnDiskStr.empty() ? "?" : sizeOnDiskStr.c_str(),
+                 gamePath.string().c_str());
+        return true;
     }
     return false;
 }

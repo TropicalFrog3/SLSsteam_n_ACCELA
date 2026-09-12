@@ -67,6 +67,7 @@ namespace RemoveLua
         std::vector<std::string> pagesNeedImportLua;
         std::vector<std::string> pagesNeedAutoCollection;
         std::vector<std::string> pagesNeedVersionTopBar;
+        std::vector<std::string> pagesNeedAccelaProgress;
 
         for (auto& page : pages)
         {
@@ -92,9 +93,15 @@ namespace RemoveLua
             {
                 pagesNeedVersionTopBar.push_back(page.webSocketDebuggerUrl);
             }
+            if (!CDPInject::isScriptInjected(page.webSocketDebuggerUrl, "!!window.__slsAccelaProgressInjected"))
+            {
+                pagesNeedAccelaProgress.push_back(page.webSocketDebuggerUrl);
+            }
         }
 
-        if (pagesNeedAppDetails.empty() && pagesNeedImportLua.empty() && pagesNeedAutoCollection.empty() && pagesNeedVersionTopBar.empty())
+        if (pagesNeedAppDetails.empty() && pagesNeedImportLua.empty() &&
+            pagesNeedAutoCollection.empty() && pagesNeedVersionTopBar.empty() &&
+            pagesNeedAccelaProgress.empty())
         {
             return true;
         }
@@ -104,6 +111,11 @@ namespace RemoveLua
         static std::string cachedImportLuaScript;
         static std::string cachedAutoCollectionScript;
         static std::string cachedVersionTopBarScript;
+        static std::string cachedAccelaProgressScript;
+        // Track whether the progress script load has permanently failed so we
+        // don't spam loadResourceFile on every poll cycle, but still allow a
+        // retry if the script later becomes available (e.g. after install).
+        static bool accelaProgressLoadAttempted = false;
 
         if (!pagesNeedAppDetails.empty() && cachedAppDetailsScript.empty())
         {
@@ -144,24 +156,32 @@ namespace RemoveLua
                 cachedVersionTopBarScript.replace(versionPos, 9, VERSION);
         }
 
-        for (const auto& wsUrl : pagesNeedAppDetails)
+        if (!pagesNeedAccelaProgress.empty() && cachedAccelaProgressScript.empty() && !accelaProgressLoadAttempted)
         {
-            CDPInject::injectJS(wsUrl, cachedAppDetailsScript);
+            cachedAccelaProgressScript = loadResourceFile("accela-progress-script.js");
+            if (cachedAccelaProgressScript.empty())
+            {
+                LOG_WARN("Failed to load accela-progress-script.js — progress card will not appear\n");
+                accelaProgressLoadAttempted = true;
+            }
         }
+
+        for (const auto& wsUrl : pagesNeedAppDetails)
+            CDPInject::injectJS(wsUrl, cachedAppDetailsScript);
 
         for (const auto& wsUrl : pagesNeedImportLua)
-        {
             CDPInject::injectJS(wsUrl, cachedImportLuaScript);
-        }
 
         for (const auto& wsUrl : pagesNeedAutoCollection)
-        {
             CDPInject::injectJS(wsUrl, cachedAutoCollectionScript);
-        }
 
         for (const auto& wsUrl : pagesNeedVersionTopBar)
-        {
             CDPInject::injectJS(wsUrl, cachedVersionTopBarScript);
+
+        if (!cachedAccelaProgressScript.empty())
+        {
+            for (const auto& wsUrl : pagesNeedAccelaProgress)
+                CDPInject::injectJS(wsUrl, cachedAccelaProgressScript);
         }
 
         return true;

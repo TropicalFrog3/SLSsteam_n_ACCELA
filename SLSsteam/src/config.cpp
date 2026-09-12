@@ -1,7 +1,6 @@
 #include "config.hpp"
 #include "config_default.hpp"
 
-#include "config_default.hpp"
 #include "feats/depotkeys.hpp"
 #include "filewatcher.hpp"
 #include "log.hpp"
@@ -755,6 +754,9 @@ bool CConfig::updateApiAuth(const std::string& newMorrenus, const std::string& n
 	if (!inFile.is_open()) return false;
 
 	const auto quoteYaml = [](const std::string& value) {
+		if (value == "\"\"")
+			return std::string();
+
 		std::string escaped;
 		escaped.reserve(value.size());
 		for (const char character : value)

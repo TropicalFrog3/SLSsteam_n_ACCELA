@@ -66,6 +66,7 @@ namespace VFTIndexes
 		extern VFTableInfo_t GetNumLibraryFolders;
 		extern VFTableInfo_t GetUpdateInfo;
 		extern VFTableInfo_t InstallApp;
+		extern VFTableInfo_t ChangeAppDownloadQueuePlacement;
 		extern VFTableInfo_t IsAppDlcInstalled;
 		extern VFTableInfo_t LaunchApp;
 		extern VFTableInfo_t UninstallApp;

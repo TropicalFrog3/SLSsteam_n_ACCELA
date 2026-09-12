@@ -17,6 +17,8 @@
 #include "vftableinfo.hpp"
 #include "feats/depotkeys.hpp"
 #include "libmem/libmem.h"
+#include "CppAccela/acceladownload.hpp"
+#include "feats/cdpinject.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -33,7 +35,6 @@
 
 #include <curl/curl.h>
 #include <map>
-#include <mutex>
 #include <thread>
 #include <string>
 
@@ -201,15 +202,8 @@ static uint32_t hkClientApps_GetAppDataSection(void* pClientApps, uint32_t appId
     
     return ret;
 }
-struct PendingInstallTask {
-    IClientAppManager* pClientAppManager;
-    uint32_t appId;
-    uint32_t library;
-    uint8_t a4;
-    pid_t pid;
-};
-static PendingInstallTask g_pendingInstallQueue[16];
-static int g_pendingInstallCount = 0;
+// Pending install queue and PendingInstallTask are now owned by
+// CppAccela::Download (acceladownload.hpp/.cpp).
 
 template<typename T>
 Hook<T>::Hook(const char* name)
@@ -600,37 +594,11 @@ static uint32_t hkSteamEngine_ProcessIPCFrame(CSteamEngine* pSteamEngine, HSteam
 
 		//LOG_DEBUG("Out\n%s\n", MemHlp::hexdump(pBufOut->mem.base, pBufOut->offset).c_str());
 
-		// Constant background monitoring for accela-download
-		if (g_pendingInstallCount > 0) {
-			for (int i = 0; i < g_pendingInstallCount; ) {
-				int status;
-				pid_t res = waitpid(g_pendingInstallQueue[i].pid, &status, WNOHANG);
-				if (res > 0) {
-					uint32_t pendingAppId = g_pendingInstallQueue[i].appId;
-					LOG_INFO("waitpid detected exit for app %u (status: %d) in IPC frame\n", pendingAppId, status);
-					if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
-						LOG_INFO("accela-download for app %u finished successfully!\n", pendingAppId);
-						
-						if (Hooks::IClientAppManager_InstallApp.originalFn.fn) {
-							Hooks::IClientAppManager_InstallApp.originalFn.fn(
-								g_pendingInstallQueue[i].pClientAppManager, 
-								pendingAppId, 
-								g_pendingInstallQueue[i].library, 
-								g_pendingInstallQueue[i].a4
-							);
-						}
-						
-						Apps::setInstalled(pendingAppId);
-					} else {
-						LOG_INFO("accela-download for app %u failed or cancelled\n", pendingAppId);
-					}
-					
-					g_pendingInstallQueue[i] = g_pendingInstallQueue[--g_pendingInstallCount];
-				} else {
-					i++;
-				}
-			}
-		}
+		// Poll all pending ACCELA download children (WNOHANG).
+		// Delegates to CppAccela::Download::pollPendingInstalls().
+		CppAccela::Download::pollPendingInstalls(
+            Hooks::IClientAppManager_InstallApp.originalFn.fn
+        );
 
 		Apps::runIPCFrame();
 		SLSAPI::runIPCFrame();
@@ -968,6 +936,15 @@ static bool hkClientAppManager_GetAppUpdateInfo(IClientAppManager* pClientAppMan
 	const bool success = Hooks::IClientAppManager_GetAppUpdateInfo.originalFn.fn(pClientAppManager, appId, a2);
 	LOG_ONCE("IClientAppManager::GetAppUpdateInfo(%p, %u, %p) -> %i\n", (void*)pClientAppManager, appId, (void*)a2, success);
 
+	// ACCELA-installed apps must never report update info.
+	// Steam has no depot keys or content sessions for them, so any update
+	// attempt fails with "content still encrypted".
+	if (Apps::isInstalled(appId))
+	{
+		LOG_ONCE("Disabled updates for ACCELA-installed app %u\n", appId);
+		return false;
+	}
+
 	if (Apps::shouldDisableUpdates(appId))
 	{
 		LOG_ONCE("Disabled updates for %u\n", appId);
@@ -981,65 +958,50 @@ static uint32_t hkClientAppManager_InstallApp(IClientAppManager* pClientAppManag
 {
     LOG_INFO("hkClientAppManager_InstallApp(%p, %u, %u, %u)\n", (void*)pClientAppManager, appId, library, a4);
 
-    if (Apps::isInstalled(appId))
-    {
-        LOG_INFO("App %u already downloaded via ACCELA. Finalizing installation.\n", appId);
-        return Hooks::IClientAppManager_InstallApp.originalFn.fn(pClientAppManager, appId, library, a4);
-    }
-
     bool locallyOwned = g_pSteamEngine && g_pSteamEngine->getUser(0) && g_pSteamEngine->getUser(0)->isSubscribed(appId);
     
-	if(locallyOwned)
+	if(locallyOwned && !g_config.isAddedAppId(appId))
 	{
 		return Hooks::IClientAppManager_InstallApp.originalFn.fn(pClientAppManager, appId, library, a4);
 	}
 
-    LOG_DEBUG("App %u (locallyOwned=%d). Launching accela-download.\n", appId, locallyOwned);
+    LOG_DEBUG("App %u (locallyOwned=%d, isAddedAppId=%d). Triggering UI for depot selection.\n", appId, locallyOwned, g_config.isAddedAppId(appId));
 
-    pid_t pid = fork();
-    if (pid == 0) {
-        setsid();
-        for (int fd = 3; fd < 256; fd++) close(fd);
-        unsetenv("LD_AUDIT");
-        unsetenv("LD_PRELOAD");
-        unsetenv("LD_LIBRARY_PATH");
-        unsetenv("STEAM_RUNTIME");
-        unsetenv("STEAM_RUNTIME_LIBRARY_PATH");
+    // Cache the install request so we can resume it after the user selects depots
+    CppAccela::Download::cacheInstallRequest(pClientAppManager, appId, library, a4);
 
-        char appid_str[32];
-        snprintf(appid_str, sizeof(appid_str), "%u", appId);
-        char cmd[512];
-        // Improved command: ensures terminal stays open on error so the user can see what happened
-        snprintf(cmd, sizeof(cmd), "if accela-download %s; then echo '\n[ACCELA] Download finished! Press Enter to close.'; else echo '\n[ACCELA] Download failed! Press Enter to close.'; fi; read", appid_str);
+    // Trigger the CDP injection to show the UI
+    CDPInject::injectDepotSelectionUI(appId);
 
-        LOG_INFO("Child process (PID: %d) executing: %s\n", getpid(), cmd);
-
-        // Try different terminal emulators
-        execlp("x-terminal-emulator", "x-terminal-emulator", "--title", "ACCELA Download", "-e", "bash", "-c", cmd, (char*)NULL);
-        execlp("gnome-terminal", "gnome-terminal", "--title", "ACCELA Download", "--", "bash", "-c", cmd, (char*)NULL);
-        execlp("konsole", "konsole", "--title", "ACCELA Download", "-e", "bash", "-c", cmd, (char*)NULL);
-        execlp("xterm", "xterm", "-T", "ACCELA Download", "-e", "bash", "-c", cmd, (char*)NULL);
-        
-        // Fallback: try bash directly if no terminal found (user won't see output though)
-        execlp("bash", "bash", "-c", cmd, (char*)NULL);
-        _exit(1);
-    } else if (pid > 0) {
-        if (g_pendingInstallCount < 16) {
-            g_pendingInstallQueue[g_pendingInstallCount++] = {pClientAppManager, appId, library, a4, pid};
-            LOG_INFO("Tracking accela-download (PID: %d) for app %u.\n", pid, appId);
-        } else {
-            LOG_WARN("Pending install queue full!\n");
-        }
-    } else {
-        LOG_WARN("Failed to fork accela-download!\n");
-    }
-    
 	return 0;
+}
+
+static void hkClientAppManager_ChangeAppDownloadQueuePlacement(IClientAppManager* pClientAppManager, uint32_t appId, uint32_t placement)
+{
+	LOG_INFO("hkClientAppManager_ChangeAppDownloadQueuePlacement(%p, %u, %u)\n", (void*)pClientAppManager, appId, placement);
+
+	bool locallyOwned = g_pSteamEngine && g_pSteamEngine->getUser(0) && g_pSteamEngine->getUser(0)->isSubscribed(appId);
+
+	if(locallyOwned && !g_config.isAddedAppId(appId))
+	{
+		Hooks::IClientAppManager_ChangeAppDownloadQueuePlacement.originalFn.fn(pClientAppManager, appId, placement);
+		return;
+	}
+
+	LOG_DEBUG("App %u (locallyOwned=%d, isAddedAppId=%d). Launching ACCELA download pipeline for update/placement.\n", appId, locallyOwned, g_config.isAddedAppId(appId));
+
+	if (!CppAccela::Download::launchForApp(pClientAppManager, appId, 1, 0))
+	{
+		LOG_WARN("Failed to launch ACCELA download for app %u\n", appId);
+	}
 }
 
 static uint32_t hkClientAppManager_UninstallApp(IClientAppManager* pClientAppManager, uint32_t appId, bool bComplete)
 {
     LOG_INFO("hkClientAppManager_UninstallApp(%p, %u)\n", (void*)pClientAppManager, appId);
+
+    // If there is an active ACCELA download for this app, cancel it
+    CppAccela::Download::cancelForApp(appId);
 
     // Remove from our installed tracking so GetAppInstallState stops forcing FULLY_INSTALLED
     Apps::removeInstalled(appId);
@@ -1059,44 +1021,18 @@ static EAppState hkClientAppManager_GetAppInstallState(IClientAppManager* pClien
         LOG_DEBUG("Forcing FULLY_INSTALLED for app %u (Was: 0x%X)\n", appId, (int)state);
         state = (EAppState)(((int)state | k_EAppStateFullyInstalled) & ~k_EAppStateUninstalled & ~k_EAppStateUpdateRequired);
     }
+    // Also strip UpdateRequired for any spoofed/added app that Steam thinks
+    // needs an update.  Steam can't update these through its normal pipeline
+    // (no depot keys/sessions), so the update would just fail with
+    // "content still encrypted".
+    else if (((int)state & k_EAppStateUpdateRequired) && g_config.isAddedAppId(appId))
+    {
+        LOG_ONCE("Stripping UpdateRequired for added app %u (Was: 0x%X)\n", appId, (int)state);
+        state = (EAppState)((int)state & ~k_EAppStateUpdateRequired);
+    }
 
     return state;
 }
-
-// static void hkClientAppManager_RunIPCFrame(void* pClientAppManager, void* a1, void* a2, void* a3)
-// {
-// 	g_pClientAppManager = reinterpret_cast<IClientAppManager*>(pClientAppManager);
-
-// 	std::shared_ptr<lm_vmt_t> vft = std::make_shared<lm_vmt_t>();
-// 	LM_VmtNew(*reinterpret_cast<lm_address_t**>(pClientAppManager), vft.get());
-
-// 	Hooks::IClientAppManager_BIsDlcEnabled.setup(vft, VFTIndexes::IClientAppManager::BIsDlcEnabled, hkClientAppManager_BIsDlcEnabled);
-// 	Hooks::IClientAppManager_GetAppUpdateInfo.setup(vft, VFTIndexes::IClientAppManager::GetUpdateInfo, hkClientAppManager_GetAppUpdateInfo);
-// 	Hooks::IClientAppManager_LaunchApp.setup(vft, VFTIndexes::IClientAppManager::LaunchApp, hkClientAppManager_LaunchApp);
-// 	Hooks::IClientAppManager_IsAppDlcInstalled.setup(vft, VFTIndexes::IClientAppManager::IsAppDlcInstalled, hkClientAppManager_IsAppDlcInstalled);
-// 	Hooks::IClientAppManager_InstallApp.setup(vft, VFTIndexes::IClientAppManager::InstallApp, hkClientAppManager_InstallApp);
-// 	Hooks::IClientAppManager_UninstallApp.setup(vft, VFTIndexes::IClientAppManager::UninstallApp, hkClientAppManager_UninstallApp);
-// 	Hooks::IClientAppManager_GetAppInstallState.setup(vft, VFTIndexes::IClientAppManager::GetAppInstallState, hkClientAppManager_GetAppInstallState);
-// 	Hooks::IClientAppManager_GetAppInstallState_Backup.setup(vft, VFTIndexes::IClientAppManager::GetAppInstallState_Backup, hkClientAppManager_GetAppInstallState);
-
-
-// 	Hooks::IClientAppManager_BIsDlcEnabled.place();
-// 	Hooks::IClientAppManager_GetAppUpdateInfo.place();
-// 	Hooks::IClientAppManager_LaunchApp.place();
-// 	Hooks::IClientAppManager_IsAppDlcInstalled.place();
-// 	Hooks::IClientAppManager_InstallApp.place();
-// 	Hooks::IClientAppManager_UninstallApp.place();
-// 	Hooks::IClientAppManager_GetAppInstallState.place();
-// 	Hooks::IClientAppManager_GetAppInstallState_Backup.place();
-
-// 	LOG_INFO("Dumping IClientAppManager VFT:\n");
-// 	for (int i = 0; i < 40; i++) {
-// 		LOG_INFO("  VFT[%d] = %p\n", i, vft->vtable[i]);
-// 	}
-
-// 	Hooks::IClientAppManager_RunIPCFrame.remove();
-// 	Hooks::IClientAppManager_RunIPCFrame.originalFn.fn(pClientAppManager, a1, a2, a3);
-// }
 
 static unsigned int hkClientApps_GetDLCCount(IClientApps* pClientApps, AppId_t appId)
 {
@@ -1618,6 +1554,7 @@ namespace Hooks
 	VFTHook<IClientAppManager_IsAppDlcInstalled_t> IClientAppManager_IsAppDlcInstalled;
 	
 	VFTHook<IClientAppManager_InstallApp_t> IClientAppManager_InstallApp;
+	VFTHook<IClientAppManager_ChangeAppDownloadQueuePlacement_t> IClientAppManager_ChangeAppDownloadQueuePlacement;
 	VFTHook<IClientAppManager_UninstallApp_t> IClientAppManager_UninstallApp;
 	VFTHook<IClientAppManager_GetAppInstallState_t> IClientAppManager_GetAppInstallState;
 	VFTHook<IClientAppManager_GetAppInstallState_t> IClientAppManager_GetAppInstallState_Backup;
@@ -1831,6 +1768,7 @@ void Hooks::placeVFTHooks()
 		Hooks::IClientAppManager_LaunchApp.setup(vft, VFTIndexes::IClientAppManager::LaunchApp, hkClientAppManager_LaunchApp);
 		Hooks::IClientAppManager_IsAppDlcInstalled.setup(vft, VFTIndexes::IClientAppManager::IsAppDlcInstalled, hkClientAppManager_IsAppDlcInstalled);
 		Hooks::IClientAppManager_InstallApp.setup(vft, VFTIndexes::IClientAppManager::InstallApp, hkClientAppManager_InstallApp);
+		Hooks::IClientAppManager_ChangeAppDownloadQueuePlacement.setup(vft, VFTIndexes::IClientAppManager::ChangeAppDownloadQueuePlacement, hkClientAppManager_ChangeAppDownloadQueuePlacement);
 		Hooks::IClientAppManager_UninstallApp.setup(vft, VFTIndexes::IClientAppManager::UninstallApp, hkClientAppManager_UninstallApp);
 
 		Hooks::IClientAppManager_BCanRemotePlayTogether.place();
@@ -1839,6 +1777,7 @@ void Hooks::placeVFTHooks()
 		Hooks::IClientAppManager_LaunchApp.place();
 		Hooks::IClientAppManager_IsAppDlcInstalled.place();
 		Hooks::IClientAppManager_InstallApp.place();
+		Hooks::IClientAppManager_ChangeAppDownloadQueuePlacement.place();
 		Hooks::IClientAppManager_UninstallApp.place();
 
 		LOG_DEBUG("IClientAppManager->vft at %p\n", reinterpret_cast<void*>(vft->vtable));

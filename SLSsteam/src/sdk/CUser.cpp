@@ -1,6 +1,5 @@
 #include "CUser.hpp"
 
-#include "CUser.hpp"
 #include "IClientAppManager.hpp"
 #include "IClientApps.hpp"
 #include "IClientUser.hpp"

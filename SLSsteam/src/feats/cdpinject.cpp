@@ -414,7 +414,7 @@ namespace CDPInject
         std::string response = wsRecvFrame(sock);
         (void)response;
 
-        LOG_INFO("CDPInject: Successfully injected JS into target WebSocket: %s\n", wsUrl.c_str());
+        // LOG_INFO("CDPInject: Successfully injected JS into target WebSocket: %s\n", wsUrl.c_str());
 
         close(sock);
         return true;
@@ -771,6 +771,49 @@ namespace CDPInject
         for (const auto& wsUrl : pagesToInject)
         {
             injectJS(wsUrl, cachedStorePageScript);
+        }
+    }
+
+    void injectDepotSelectionUI(uint32_t appId)
+    {
+        auto pages = fetchPages();
+        if (pages.empty()) return;
+
+        std::vector<std::string> pagesToInject;
+        for (auto& page : pages)
+        {
+            // We want to inject into the Steam library or store page where the user clicked Install.
+            if (page.url.find("steam://") != std::string::npos || 
+                page.url.find("steamloopback.host") != std::string::npos ||
+                page.url.find("store.steampowered.com") != std::string::npos ||
+                page.title == "Steam" ||
+                page.title.find("Library") != std::string::npos)
+            {
+                if (!page.webSocketDebuggerUrl.empty())
+                {
+                    pagesToInject.push_back(page.webSocketDebuggerUrl);
+                }
+            }
+        }
+
+        if (pagesToInject.empty()) return;
+
+        std::string scriptTemplate = loadResourceFile("depot-selection-script.js");
+        if (scriptTemplate.empty()) {
+            LOG_DEBUG("CDPInject::injectDepotSelectionUI: Failed to load depot-selection-script.js\n");
+            return;
+        }
+
+        std::string script = scriptTemplate;
+        size_t pos;
+        if ((pos = script.find("%APPID%")) != std::string::npos)
+        {
+            script.replace(pos, 7, std::to_string(appId));
+        }
+
+        for (const auto& wsUrl : pagesToInject)
+        {
+            injectJS(wsUrl, script);
         }
     }
 }

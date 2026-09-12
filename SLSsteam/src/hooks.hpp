@@ -162,6 +162,7 @@ namespace Hooks
 	typedef void*(*IClientAppManager_LaunchApp_t)(IClientAppManager*, AppId_t*, void*, void*, void*);
 	typedef bool(*IClientAppManager_IsAppDlcInstalled_t)(IClientAppManager*, AppId_t, AppId_t);
 	typedef uint32_t(*IClientAppManager_InstallApp_t)(IClientAppManager*, uint32_t, uint32_t, uint8_t);
+	typedef void(*IClientAppManager_ChangeAppDownloadQueuePlacement_t)(IClientAppManager*, uint32_t, uint32_t);
 	typedef uint32_t(*IClientAppManager_UninstallApp_t)(IClientAppManager*, uint32_t, bool);
 	typedef EAppState(*IClientAppManager_GetAppInstallState_t)(void*, uint32_t);
 
@@ -184,6 +185,7 @@ namespace Hooks
 	extern VFTHook<IClientAppManager_LaunchApp_t> IClientAppManager_LaunchApp;
 	extern VFTHook<IClientAppManager_IsAppDlcInstalled_t> IClientAppManager_IsAppDlcInstalled;
 	extern VFTHook<IClientAppManager_InstallApp_t> IClientAppManager_InstallApp;
+	extern VFTHook<IClientAppManager_ChangeAppDownloadQueuePlacement_t> IClientAppManager_ChangeAppDownloadQueuePlacement;
 	extern VFTHook<IClientAppManager_UninstallApp_t> IClientAppManager_UninstallApp;
 	extern VFTHook<IClientAppManager_GetAppInstallState_t> IClientAppManager_GetAppInstallState;
 	extern VFTHook<IClientAppManager_GetAppInstallState_t> IClientAppManager_GetAppInstallState_Backup;

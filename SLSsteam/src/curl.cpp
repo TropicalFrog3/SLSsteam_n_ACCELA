@@ -1,30 +1,32 @@
 #include "curl.hpp"
 
-#include "log.hpp"
-
+#include <cstdio>
 #include <cstdlib>
 #include <sstream>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+// Local debug logging — safe for standalone helper binary
+#define CURL_DEBUG(fmt, ...) fprintf(stderr, "[Curl] " fmt __VA_OPT__(,) __VA_ARGS__)
+#define CURL_ERROR(fmt, ...) fprintf(stderr, "[Curl ERROR] " fmt __VA_OPT__(,) __VA_ARGS__)
 
 //Spawn an external instance of curl, read it's stdout into out and return it's exit code
 //It's necessary because SteamOS seems broken. Curling certain URLs
 //will crash inside libssl.3.so (might have to do with broken certs, idk for sure).
 int Curl::getString(const char* url, std::string& out)
 {
-	LOG_DEBUG("Curl::getString(%s)\n", url);
+	CURL_DEBUG("getString(%s)\n", url);
 
 	int pipefd[2];
 
 	if (pipe(pipefd) == -1)
 	{
-		LOG_ERROR("Failed to create pipe!\n");
+		CURL_ERROR("Failed to create pipe!\n");
 		return 1;
 	}
 
-	LOG_DEBUG("Created pipe %i : %i\n", pipefd[0], pipefd[1]);
+	CURL_DEBUG("Created pipe %i : %i\n", pipefd[0], pipefd[1]);
 
 	constexpr static const char* env[] =
 	{
@@ -46,7 +48,7 @@ int Curl::getString(const char* url, std::string& out)
 		close(pipefd[0]);
 		close(pipefd[1]);
 
-		LOG_ERROR("Failed to fork!\n");
+		CURL_ERROR("Failed to fork!\n");
 		return 1;
 	}
 
@@ -54,7 +56,7 @@ int Curl::getString(const char* url, std::string& out)
 	{
 		if (dup2(pipefd[1], STDOUT_FILENO) == -1)
 		{
-			LOG_ERROR("Failed to dup2!\n");
+			CURL_ERROR("Failed to dup2!\n");
 			exit(1);
 		}
 
@@ -67,14 +69,14 @@ int Curl::getString(const char* url, std::string& out)
 		//NixOS
 		execve("/run/current-system/sw/bin/curl", const_cast<char**>(args), const_cast<char**>(env));
 
-		LOG_DEBUG("Failed to execv curl!\n");
+		CURL_DEBUG("Failed to execv curl!\n");
 		exit(1);
 	}
 
 	//No need for writing
 	close(pipefd[1]);
 
-	LOG_DEBUG("Child PID %i\n", pid);
+	CURL_DEBUG("Child PID %i\n", pid);
 
 	std::ostringstream bufSS;
 	char buf[8192];
@@ -100,7 +102,7 @@ int Curl::getString(const char* url, std::string& out)
 
 	status = WEXITSTATUS(status);
 
-	LOG_DEBUG("Exit Status: %i\n", status);
+	CURL_DEBUG("Exit Status: %i\n", status);
 
 	out = bufSS.str();
 

@@ -3,6 +3,8 @@
 #include "luadownload.hpp"
 #include "removelua.hpp"
 #include "apps.hpp"
+#include "../CppAccela/acceladownload.hpp"
+#include "../CppAccela/accelaluaparser.hpp"
 #include "../sdk/IClientAppManager.hpp"
 #include "../sdk/IClientApps.hpp"
 #include "../log.hpp"
@@ -889,14 +891,242 @@ namespace StoreInject
 
                                     bool exists = isUnlocked && (gameExists || luaExists);
                                     bool pending = g_pendingRestartApps.count(appId) > 0;
+                                    bool downloading = CppAccela::Download::isPending(appId);
+                                    // Also treat as downloading if the progress JSON exists with a
+                                    // non-terminal phase. This covers two gaps:
+                                    //   1. The scan fires after the child exits but before the JS
+                                    //      has had a chance to see downloading:true even once.
+                                    //   2. The user opens Steam mid-download (process already running,
+                                    //      isPending may be false if the child exited, but work is done).
+                                    // Terminal phases are "done", "failed", and "idle" — anything else
+                                    // (starting, preparing, downloading, postprocessing) is active.
+                                    if (!downloading)
+                                    {
+                                        const char* tmpDir = getenv("TMPDIR");
+                                        std::string progressPath = std::string(tmpDir ? tmpDir : "/tmp")
+                                                                   + "/sls_dl_" + idStr + ".json";
+                                        std::ifstream pf(progressPath);
+                                        if (pf.is_open())
+                                        {
+                                            std::string pjson((std::istreambuf_iterator<char>(pf)),
+                                                               std::istreambuf_iterator<char>());
+                                            // Only the three terminal phases mean "not active"
+                                            bool isDone   = pjson.find("\"phase\":\"done\"")   != std::string::npos;
+                                            bool isFailed = pjson.find("\"phase\":\"failed\"") != std::string::npos;
+                                            bool isIdle   = pjson.find("\"phase\":\"idle\"")   != std::string::npos;
+                                            if (!isDone && !isFailed && !isIdle)
+                                                downloading = true;                                        }
+                                    }
                                     bool onlineFixInstalled = Apps::isOnlineFixInstalled(appId);
                                     bool autoCrackInstalled = Apps::isAutoCrackInstalled(appId);
+                                    bool paused = CppAccela::Download::isPaused(appId);
                                     
                                     std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n";
                                     response += "{\"exists\":" + std::string(exists ? "true" : "false") + 
                                                ",\"pending\":" + std::string(pending ? "true" : "false") +
+                                               ",\"downloading\":" + std::string(downloading ? "true" : "false") +
+                                               ",\"paused\":" + std::string(paused ? "true" : "false") +
                                                ",\"onlineFixInstalled\":" + std::string(onlineFixInstalled ? "true" : "false") +
                                                ",\"autoCrackInstalled\":" + std::string(autoCrackInstalled ? "true" : "false") + "}";
+                                    send(new_socket, response.c_str(), response.size(), 0);
+                                    close(new_socket);
+                                    handled = true;
+                                }
+                            } catch (...) {
+                                handled = false;
+                                close(new_socket);
+                            }
+                        }
+                        else if (request.find("/get-depots?id=") != std::string::npos)
+                        {
+                            try {
+                                size_t idPos = request.find("id=");
+                                if (idPos != std::string::npos)
+                                {
+                                    size_t endPos = request.find_first_of(" &", idPos);
+                                    std::string idStr = request.substr(idPos + 3, (endPos == std::string::npos) ? std::string::npos : (endPos - (idPos + 3)));
+                                    uint32_t appId = std::stoul(idStr);
+                                    LOG_INFO("StoreInject: Received /get-depots for AppID %u\n", appId);
+
+                                    std::string pluginDir = g_config.getPluginDir();
+                                    auto luaPath = std::filesystem::path(pluginDir) / (idStr + ".lua");
+                                    std::string respBody;
+                                    if (std::filesystem::exists(luaPath)) {
+                                        auto parseResult = CppAccela::LuaParser::parseFile(luaPath.string());
+                                        if (parseResult.valid) {
+                                            std::string depotsJson = "[";
+                                            bool first = true;
+                                            for (const auto& [depotId, info] : parseResult.depots) {
+                                                if (!first) depotsJson += ",";
+                                                depotsJson += "{\"id\":\"" + depotId + "\",\"name\":\"" + info.description + "\",\"size\":\"" + info.sizeBytes + "\"}";
+                                                first = false;
+                                            }
+                                            depotsJson += "]";
+                                            respBody = "{\"success\":true,\"depots\":" + depotsJson + "}";
+                                        } else {
+                                            respBody = "{\"success\":false,\"message\":\"Invalid Lua plugin file\"}";
+                                        }
+                                    } else {
+                                        respBody = "{\"success\":false,\"message\":\"Lua plugin file not found\"}";
+                                    }
+
+                                    std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: " + std::to_string(respBody.size()) + "\r\n\r\n" + respBody;
+                                    send(new_socket, response.c_str(), response.size(), 0);
+                                    close(new_socket);
+                                    handled = true;
+                                }
+                            } catch (...) { handled = false; close(new_socket); }
+                        }
+                        else if (request.find("/start-download?id=") != std::string::npos)
+                        {
+                            try {
+                                size_t idPos = request.find("id=");
+                                if (idPos != std::string::npos)
+                                {
+                                    size_t idEndPos = request.find("&", idPos);
+                                    std::string idStr = request.substr(idPos + 3, (idEndPos == std::string::npos) ? std::string::npos : (idEndPos - (idPos + 3)));
+                                    uint32_t appId = std::stoul(idStr);
+
+                                    std::string depots = "";
+                                    size_t depotsPos = request.find("depots=");
+                                    if (depotsPos != std::string::npos) {
+                                        size_t depotsEndPos = request.find_first_of(" &", depotsPos);
+                                        depots = request.substr(depotsPos + 7, (depotsEndPos == std::string::npos) ? std::string::npos : (depotsEndPos - (depotsPos + 7)));
+                                    }
+
+                                    LOG_INFO("StoreInject: Received /start-download for AppID %u with depots %s\n", appId, depots.c_str());
+
+                                    bool started = CppAccela::Download::startCachedInstall(appId, urlDecode(depots));
+                                    std::string respBody = started ? "{\"success\":true}" : "{\"success\":false,\"message\":\"Could not start cached install\"}";
+                                    std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: " + std::to_string(respBody.size()) + "\r\n\r\n" + respBody;
+                                    send(new_socket, response.c_str(), response.size(), 0);
+                                    close(new_socket);
+                                    handled = true;
+                                }
+                            } catch (...) { handled = false; close(new_socket); }
+                        }
+                        else if (request.find("/cancel-download?id=") != std::string::npos)
+                        {
+                            try {
+                                size_t idPos = request.find("id=");
+                                if (idPos != std::string::npos)
+                                {
+                                    size_t endPos = request.find_first_of(" &", idPos);
+                                    std::string idStr = request.substr(idPos + 3, (endPos == std::string::npos) ? std::string::npos : (endPos - (idPos + 3)));
+                                    uint32_t appId = std::stoul(idStr);
+                                    LOG_INFO("StoreInject: Received /cancel-download for AppID %u\n", appId);
+
+                                    CppAccela::Download::discardCachedInstall(appId);
+                                    std::string respBody = "{\"success\":true}";
+                                    std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: " + std::to_string(respBody.size()) + "\r\n\r\n" + respBody;
+                                    send(new_socket, response.c_str(), response.size(), 0);
+                                    close(new_socket);
+                                    handled = true;
+                                }
+                            } catch (...) { handled = false; close(new_socket); }
+                        }
+                        else if (request.find("/cancel?id=") != std::string::npos)
+                        {
+                            try {
+                                size_t idPos = request.find("id=");
+                                if (idPos != std::string::npos)
+                                {
+                                    size_t endPos = request.find_first_of(" &", idPos);
+                                    std::string idStr = request.substr(idPos + 3, (endPos == std::string::npos) ? std::string::npos : (endPos - (idPos + 3)));
+                                    uint32_t appId = std::stoul(idStr);
+                                    LOG_INFO("StoreInject: Received /cancel for AppID %u\n", appId);
+
+                                    bool cancelled = CppAccela::Download::cancelForApp(appId);
+                                    std::string respBody = cancelled
+                                        ? "{\"success\":true}"
+                                        : "{\"success\":false,\"message\":\"Not downloading\"}";
+                                    std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: " + std::to_string(respBody.size()) + "\r\n\r\n" + respBody;
+                                    send(new_socket, response.c_str(), response.size(), 0);
+                                    close(new_socket);
+                                    handled = true;
+                                }
+                            } catch (...) {
+                                handled = false;
+                                close(new_socket);
+                            }
+                        }
+                        else if (request.find("/pause?id=") != std::string::npos)
+                        {
+                            try {
+                                size_t idPos = request.find("id=");
+                                if (idPos != std::string::npos)
+                                {
+                                    size_t endPos = request.find_first_of(" &", idPos);
+                                    std::string idStr = request.substr(idPos + 3, (endPos == std::string::npos) ? std::string::npos : (endPos - (idPos + 3)));
+                                    uint32_t appId = std::stoul(idStr);
+                                    LOG_INFO("StoreInject: Received /pause for AppID %u\n", appId);
+                                    bool ok = CppAccela::Download::pauseForApp(appId);
+                                    std::string respBody = ok ? "{\"success\":true}" : "{\"success\":false,\"message\":\"Not downloading or already paused\"}";
+                                    std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: " + std::to_string(respBody.size()) + "\r\n\r\n" + respBody;
+                                    send(new_socket, response.c_str(), response.size(), 0);
+                                    close(new_socket);
+                                    handled = true;
+                                }
+                            } catch (...) { handled = false; close(new_socket); }
+                        }
+                        else if (request.find("/resume?id=") != std::string::npos)
+                        {
+                            try {
+                                size_t idPos = request.find("id=");
+                                if (idPos != std::string::npos)
+                                {
+                                    size_t endPos = request.find_first_of(" &", idPos);
+                                    std::string idStr = request.substr(idPos + 3, (endPos == std::string::npos) ? std::string::npos : (endPos - (idPos + 3)));
+                                    uint32_t appId = std::stoul(idStr);
+                                    LOG_INFO("StoreInject: Received /resume for AppID %u\n", appId);
+                                    bool ok = CppAccela::Download::resumeForApp(appId);
+                                    std::string respBody = ok ? "{\"success\":true}" : "{\"success\":false,\"message\":\"Not paused\"}";
+                                    std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: " + std::to_string(respBody.size()) + "\r\n\r\n" + respBody;
+                                    send(new_socket, response.c_str(), response.size(), 0);
+                                    close(new_socket);
+                                    handled = true;
+                                }
+                            } catch (...) { handled = false; close(new_socket); }
+                        }
+                        else if (request.find("/progress?id=") != std::string::npos)
+                        {
+                            try {
+                                size_t idPos = request.find("id=");
+                                if (idPos != std::string::npos)
+                                {
+                                    size_t endPos = request.find_first_of(" &", idPos);
+                                    std::string idStr = request.substr(idPos + 3, (endPos == std::string::npos) ? std::string::npos : (endPos - (idPos + 3)));
+                                    uint32_t appId = std::stoul(idStr);
+
+                                    // Read /tmp/sls_dl_<appid>.json written by accela-helper
+                                    std::string progressJson;
+                                    {
+                                        const char* tmp = getenv("TMPDIR");
+                                        std::string path = std::string(tmp ? tmp : "/tmp")
+                                                           + "/sls_dl_" + idStr + ".json";
+                                        std::ifstream f(path);
+                                        if (f.is_open())
+                                        {
+                                            std::ostringstream ss;
+                                            ss << f.rdbuf();
+                                            progressJson = ss.str();
+                                            // Strip trailing newline
+                                            while (!progressJson.empty() &&
+                                                   (progressJson.back() == '\n' || progressJson.back() == '\r'))
+                                                progressJson.pop_back();
+                                        }
+                                    }
+
+                                    if (progressJson.empty())
+                                    {
+                                        // Not downloading — return a neutral response
+                                        progressJson = "{\"phase\":\"idle\",\"gameName\":\"\","
+                                                       "\"depotsDone\":0,\"depotsTotal\":0,\"percent\":0}";
+                                    }
+
+                                    std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                                                           "Access-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n"
+                                                           + progressJson;
                                     send(new_socket, response.c_str(), response.size(), 0);
                                     close(new_socket);
                                     handled = true;

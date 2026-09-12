@@ -2,6 +2,7 @@
 
 #include <string>
 #include <vector>
+#include <cstdint>
 
 namespace CDPInject
 {
@@ -42,6 +43,11 @@ namespace CDPInject
      * This is the direct C++ replacement for inject_cef.py.
      */
     void injectStorePages();
+
+    /**
+     * Injects a depot selection UI for the given appId into any active Steam Client library or store page.
+     */
+    void injectDepotSelectionUI(uint32_t appId);
 
     /**
      * Use the Steam browser to download a URL by injecting fetch() into an existing page.

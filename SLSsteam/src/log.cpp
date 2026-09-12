@@ -7,7 +7,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <cstdlib>
 #include <memory>
 #include <sstream>
 
@@ -194,7 +193,7 @@ void CLog::__log(const unsigned int flags, const char* file, const char* functio
 
 CLog::CLog(const char* path) : path(path)
 {
-	ofstream = std::ofstream(path, std::ios_base::app);
+	ofstream = std::ofstream(path, std::ios_base::trunc);
 	if (!ofstream.is_open())
 	{
 		//We don't want to boot without a logfile

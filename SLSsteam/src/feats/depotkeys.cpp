@@ -85,8 +85,8 @@ void DepotKeys::scanLuaPluginsForDepotKeys()
 					newKeys[depotId] = hexKey;
 					// LOG_INFO("DepotKeys: Loaded key for depot %u (from %s)\n",
 					// 			 depotId, entry.path().filename().c_str());
-					LOG_INFO("DepotKeys: Loaded key for depot %u (from %s)\n",
-							 depotId, entry.path().filename().c_str());
+					// LOG_INFO("DepotKeys: Loaded key for depot %u (from %s)\n",
+							//  depotId, entry.path().filename().c_str());
 				}
 				else
 				{
