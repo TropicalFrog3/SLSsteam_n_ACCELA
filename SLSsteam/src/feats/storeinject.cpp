@@ -956,7 +956,38 @@ namespace StoreInject
                                         if (parseResult.valid) {
                                             std::string depotsJson = "[";
                                             bool first = true;
-                                            for (const auto& [depotId, info] : parseResult.depots) {
+                                            for (auto& [depotId, info] : parseResult.depots) {
+                                                if (g_pClientApps) {
+                                                    uint32_t depotIdNum = 0;
+                                                    try { depotIdNum = std::stoul(depotId); } catch (...) {}
+                                                    
+                                                    if (depotIdNum > 0) {
+                                                        if (info.description.empty() || info.description == ("Depot " + depotId)) {
+                                                            char nameBuf[256] = {0};
+                                                            std::string key = "depots/" + depotId + "/name";
+                                                            if (g_pClientApps->getAppData(appId, key.c_str(), nameBuf, sizeof(nameBuf)) > 0 && nameBuf[0]) {
+                                                                info.description = nameBuf;
+                                                            } else {
+                                                                // If the depot has no specific name, use the game's name
+                                                                char gameNameBuf[256] = {0};
+                                                                if (g_pClientApps->getAppData(appId, "common/name", gameNameBuf, sizeof(gameNameBuf)) > 0 && gameNameBuf[0]) {
+                                                                    info.description = std::string(gameNameBuf) + " Content";
+                                                                } else {
+                                                                    info.description = "Base Game Content";
+                                                                }
+                                                            }
+                                                        }
+                                                        
+                                                        if (info.sizeBytes.empty()) {
+                                                            char sizeBuf[64] = {0};
+                                                            std::string key = "depots/" + depotId + "/maxsize";
+                                                            if (g_pClientApps->getAppData(appId, key.c_str(), sizeBuf, sizeof(sizeBuf)) > 0 && sizeBuf[0]) {
+                                                                info.sizeBytes = sizeBuf;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                
                                                 if (!first) depotsJson += ",";
                                                 depotsJson += "{\"id\":\"" + depotId + "\",\"name\":\"" + info.description + "\",\"size\":\"" + info.sizeBytes + "\"}";
                                                 first = false;

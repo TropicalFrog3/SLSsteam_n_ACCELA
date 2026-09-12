@@ -26,6 +26,7 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <thread>
 #include <pthread.h>
 #include <strings.h>
 #include <unistd.h>
@@ -970,8 +971,10 @@ static uint32_t hkClientAppManager_InstallApp(IClientAppManager* pClientAppManag
     // Cache the install request so we can resume it after the user selects depots
     CppAccela::Download::cacheInstallRequest(pClientAppManager, appId, library, a4);
 
-    // Trigger the CDP injection to show the UI
-    CDPInject::injectDepotSelectionUI(appId);
+    // Trigger the CDP injection to show the UI asynchronously so we don't freeze the UI
+    std::thread([appId]() {
+        CDPInject::injectDepotSelectionUI(appId);
+    }).detach();
 
 	return 0;
 }

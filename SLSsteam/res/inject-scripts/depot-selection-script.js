@@ -21,7 +21,27 @@
         '</div>' +
         '<!-- Content -->' +
         '<div id="sls-depot-content" style="flex-grow: 1; overflow-y: auto; margin-bottom: 24px; padding-right: 8px;">' +
-            '<div style="display:flex; justify-content:center; align-items:center; height: 100px; color:#8a8d96; font-size: 14px;">Loading depots...</div>' +
+            '<div class="sls-skeleton-item">' +
+                '<div class="sls-skeleton-checkbox"></div>' +
+                '<div class="sls-skeleton-info">' +
+                    '<div class="sls-skeleton-line-1"></div>' +
+                    '<div class="sls-skeleton-line-2"></div>' +
+                '</div>' +
+            '</div>' +
+            '<div class="sls-skeleton-item">' +
+                '<div class="sls-skeleton-checkbox"></div>' +
+                '<div class="sls-skeleton-info">' +
+                    '<div class="sls-skeleton-line-1" style="width: 45%;"></div>' +
+                    '<div class="sls-skeleton-line-2"></div>' +
+                '</div>' +
+            '</div>' +
+            '<div class="sls-skeleton-item" style="opacity: 0.5;">' +
+                '<div class="sls-skeleton-checkbox"></div>' +
+                '<div class="sls-skeleton-info">' +
+                    '<div class="sls-skeleton-line-1" style="width: 70%;"></div>' +
+                    '<div class="sls-skeleton-line-2"></div>' +
+                '</div>' +
+            '</div>' +
         '</div>' +
         '<!-- Footer Actions -->' +
         '<div style="display:flex; justify-content:flex-end; gap:12px; flex-shrink: 0;">' +
@@ -34,6 +54,13 @@
     
     var style = document.createElement('style');
     style.textContent = 
+        ' @keyframes sls-shimmer { 0% { background-position: -468px 0; } 100% { background-position: 468px 0; } }' +
+        ' .sls-skeleton-item { display: flex; align-items: flex-start; padding: 12px; border-radius: 8px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.04); margin-bottom: 8px; }' +
+        ' .sls-skeleton-checkbox { width: 18px; height: 18px; border-radius: 4px; background: #2a2d36; margin-right: 12px; margin-top: 2px; }' +
+        ' .sls-skeleton-info { display: flex; flex-direction: column; flex-grow: 1; }' +
+        ' .sls-skeleton-line-1, .sls-skeleton-line-2 { background: #2a2d36; background-image: linear-gradient(to right, #2a2d36 0%, #3a3d46 20%, #2a2d36 40%, #2a2d36 100%); background-repeat: no-repeat; background-size: 800px 100%; animation: sls-shimmer 1.5s linear infinite forwards; border-radius: 4px; }' +
+        ' .sls-skeleton-line-1 { height: 14px; width: 60%; margin-bottom: 8px; }' +
+        ' .sls-skeleton-line-2 { height: 12px; width: 100%; }' +
         ' #sls-depot-close-x:hover { background: rgba(255,255,255,0.1) !important; color: #fff !important; }' +
         ' #sls-depot-btn-cancel:hover { background: rgba(255,255,255,0.03) !important; color: #fff !important; border-color: rgba(255,255,255,0.2) !important; }' +
         ' #sls-depot-btn-download:hover { transform: translateY(-1.5px); box-shadow: 0 6px 16px rgba(0,0,0,0.3); filter: brightness(1.15); }' +
@@ -124,10 +151,21 @@
                 var depot = data.depots[i];
                 var sizeStr = depot.size ? formatBytes(parseInt(depot.size, 10)) : 'Unknown size';
                 
+                var displayName = depot.name;
+                if (!displayName || displayName.indexOf('Depot ') === 0) {
+                    var depotIdNum = parseInt(depot.id, 10);
+                    var appIdNum = parseInt(appid, 10);
+                    if (depotIdNum === appIdNum || depotIdNum === appIdNum + 1) {
+                        displayName = 'Base Game Content';
+                    } else {
+                        displayName = 'Additional Content (' + depot.id + ')';
+                    }
+                }
+                
                 html += '<label class="sls-depot-item">' +
                     '<input type="checkbox" class="sls-depot-checkbox" value="' + depot.id + '">' +
                     '<div class="sls-depot-info">' +
-                        '<div class="sls-depot-name">' + depot.name + '</div>' +
+                        '<div class="sls-depot-name">' + displayName + '</div>' +
                         '<div class="sls-depot-meta">' +
                             '<span>ID: ' + depot.id + '</span>' +
                             '<span>' + sizeStr + '</span>' +
@@ -137,6 +175,37 @@
             }
             
             contentDiv.innerHTML = html;
+
+            // Async fetch for DLC names and unknown sizes from SteamCMD
+            var depotItems = contentDiv.querySelectorAll('.sls-depot-item');
+            for (var l = 0; l < depotItems.length; l++) {
+                var el = depotItems[l];
+                var nameEl = el.querySelector('.sls-depot-name');
+                var metaEl = el.querySelector('.sls-depot-meta');
+                var sizeSpan = metaEl.querySelectorAll('span')[1];
+                var depotId = el.querySelector('.sls-depot-checkbox').value;
+                
+                if (nameEl.innerText.indexOf('Additional Content') === 0 || sizeSpan.innerText === 'Unknown size') {
+                    (function(nEl, sSpan, did) {
+                        var isDlc = nEl.innerText.indexOf('Additional Content') === 0;
+                        var targetAppId = isDlc ? (parseInt(did, 10) - 1) : parseInt(appid, 10);
+                        
+                        fetch('https://api.steamcmd.net/v1/info/' + targetAppId)
+                            .then(function(r) { return r.json(); })
+                            .then(function(dlcData) {
+                                if (dlcData && dlcData.data && dlcData.data[targetAppId]) {
+                                    var appData = dlcData.data[targetAppId];
+                                    if (isDlc && appData.common && appData.common.name) {
+                                        nEl.innerText = appData.common.name;
+                                    }
+                                    if (sSpan.innerText === 'Unknown size' && appData.depots && appData.depots[did] && appData.depots[did].manifests && appData.depots[did].manifests.public && appData.depots[did].manifests.public.size) {
+                                        sSpan.innerText = formatBytes(parseInt(appData.depots[did].manifests.public.size, 10));
+                                    }
+                                }
+                            }).catch(function(){});
+                    })(nameEl, sizeSpan, depotId);
+                }
+            }
 
             // Add event listeners to checkboxes to enable/disable the download button
             var checkboxes = contentDiv.querySelectorAll('.sls-depot-checkbox');
