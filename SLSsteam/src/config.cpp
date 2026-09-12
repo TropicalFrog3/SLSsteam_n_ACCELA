@@ -783,18 +783,30 @@ bool CConfig::updateApiAuth(const std::string& newMorrenus, const std::string& n
 	{
 		if (line.find("MorrenusKey:") == 0)
 		{
-			lines.push_back("MorrenusKey: \"" + morrenus + "\"");
-			foundMorrenus = true;
+			if (!foundMorrenus)
+			{
+				lines.push_back("MorrenusKey: \"" + morrenus + "\"");
+				foundMorrenus = true;
+			}
+			// else: drop duplicate line
 		}
 		else if (line.find("RyuuKey:") == 0)
 		{
-			lines.push_back("RyuuKey: \"" + ryuu + "\"");
-			foundRyuu = true;
+			if (!foundRyuu)
+			{
+				lines.push_back("RyuuKey: \"" + ryuu + "\"");
+				foundRyuu = true;
+			}
+			// else: drop duplicate line
 		}
 		else if (line.find("DepotBoxKey:") == 0)
 		{
-			lines.push_back("DepotBoxKey: \"" + depotBox + "\"");
-			foundDepotBox = true;
+			if (!foundDepotBox)
+			{
+				lines.push_back("DepotBoxKey: \"" + depotBox + "\"");
+				foundDepotBox = true;
+			}
+			// else: drop duplicate line
 		}
 		else if (line.find("RyuuCookies:") == 0)
 		{
@@ -818,8 +830,7 @@ bool CConfig::updateApiAuth(const std::string& newMorrenus, const std::string& n
 
 	for (size_t i = 0; i < lines.size(); ++i)
 	{
-		outFile << lines[i];
-		if (i + 1 < lines.size()) outFile << '\n';
+		outFile << lines[i] << '\n'; // always emit newline — keeps file well-formed
 	}
 	outFile.close();
 
