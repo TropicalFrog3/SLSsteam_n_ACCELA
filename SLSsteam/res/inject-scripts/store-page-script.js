@@ -52,13 +52,157 @@
         window.location.hash = 'sls-auth-MORR=' + encodeURIComponent(morr) + '&RYUU=' + encodeURIComponent(ryuu) + '&DPBX=' + encodeURIComponent(dpbx) + '-TS=' + Date.now();
     }
 
-    function sendLuaRequest(appid, providerIndex) {
+    function sendLuaRequest(appid, providerIndex, customOrder) {
         var stamp = Date.now();
         if (providerIndex === null) {
-            window.location.hash = 'sls-click-auto-' + appid + '-' + getProviderOrder().join(',') + '-' + stamp;
+            var order = customOrder || getProviderOrder();
+            window.location.hash = 'sls-click-auto-' + appid + '-' + order.join(',') + '-' + stamp;
         } else {
             window.location.hash = 'sls-click-provider-' + providerIndex + '-' + appid + '-' + stamp;
         }
+    }
+
+    // ── Row loading bar ───────────────────────────────────────────────────
+    // Phases reported via pushStatus (button span text) → progress milestones.
+    // Between milestones the bar crawls automatically; it snaps forward when the
+    // next phase text is detected. On success it completes to 100% then fades
+    // out; on failure it turns red and fades out after a short pause.
+
+    var SLS_PHASE_MAP = [
+        { match: /checking/i,    pct: 5  },
+        { match: /trying/i,      pct: 35 },
+        { match: /browser/i,     pct: 45 },
+        { match: /extracting/i,  pct: 65 },
+        { match: /installing/i,  pct: 82 },
+        { match: /installed/i,   pct: 100 },
+    ];
+    var SLS_FAIL_TEXTS = /not available|failed|not found|steam not|no api/i;
+
+    function injectLoadingBarStyles() {
+        if (document.getElementById('sls-bar-style')) return;
+        var s = document.createElement('style');
+        s.id = 'sls-bar-style';
+        s.textContent = [
+            '.sls-bar-host { position:relative; overflow:hidden; }',
+            '.sls-bar-fill {',
+            '  position:absolute; top:0; left:0; height:100%;',
+            '  width:0%; border-radius:inherit;',
+            '  background:linear-gradient(90deg,#22c55e 0%,#4ade80 100%);',
+            '  transition:width 0.55s cubic-bezier(0.4,0,0.2,1),',
+            '             background 0.3s ease;',
+            '  pointer-events:none; z-index:0;',
+            '}',
+            '.sls-bar-fill.sls-bar-fail {',
+            '  background:linear-gradient(90deg,#ef4444 0%,#f87171 100%);',
+            '}',
+            '.sls-bar-fill.sls-bar-done {',
+            '  background:linear-gradient(90deg,#16a34a 0%,#4ade80 100%);',
+            '}',
+            '.sls-bar-host > a { position:relative; z-index:1; }',
+        ].join('\n');
+        document.head.appendChild(s);
+    }
+
+    /**
+     * Attach a loading bar to `luaLink`'s parent wrapper and poll the span
+     * text for phase updates until the download completes or fails.
+     * Works identically for single-provider and auto-download.
+     */
+    function startRowLoadingBar(luaBtn, luaLink) {
+        injectLoadingBarStyles();
+
+        // Find the actual clickable <a> element's parent to host the bar
+        var host = luaLink.parentElement || luaBtn;
+        host.classList.add('sls-bar-host');
+
+        // Remove any stale bar
+        var oldBar = host.querySelector('.sls-bar-fill');
+        if (oldBar) oldBar.remove();
+
+        var bar = document.createElement('div');
+        bar.className = 'sls-bar-fill';
+        host.insertBefore(bar, host.firstChild);
+
+        var currentPct  = 0;
+        var targetPct   = 0;
+        var pollId      = null;
+        var lastText    = '';
+        var finished    = false;
+
+        function setTarget(pct) {
+            if (pct <= targetPct) return;
+            targetPct = pct;
+            bar.style.width = targetPct + '%';
+        }
+
+        function finish(success) {
+            if (finished) return;
+            finished = true;
+            clearInterval(pollId);
+            if (success) {
+                bar.classList.add('sls-bar-done');
+                bar.style.width = '100%';
+                setTimeout(function() {
+                    bar.style.transition = 'opacity 0.6s ease';
+                    bar.style.opacity = '0';
+                    setTimeout(function() {
+                        bar.remove();
+                        host.classList.remove('sls-bar-host');
+                    }, 650);
+                }, 900);
+            } else {
+                bar.classList.add('sls-bar-fail');
+                bar.style.width = '100%';
+                setTimeout(function() {
+                    bar.style.transition = 'opacity 0.8s ease';
+                    bar.style.opacity = '0';
+                    setTimeout(function() {
+                        bar.remove();
+                        host.classList.remove('sls-bar-host');
+                    }, 850);
+                }, 2200);
+            }
+        }
+
+        // Crawl the bar a tiny bit every tick so it always looks alive
+        function crawl() {
+            if (finished) return;
+            currentPct = parseFloat(bar.style.width) || 0;
+            // Slow organic crawl up to targetPct — max 0.18% per tick
+            if (currentPct < targetPct) {
+                var step = Math.max(0.05, (targetPct - currentPct) * 0.04);
+                currentPct = Math.min(targetPct, currentPct + step);
+                bar.style.width = currentPct + '%';
+            }
+        }
+        var crawlId = setInterval(crawl, 80);
+
+        // Start at 2% immediately so the bar is visible right away
+        setTarget(2);
+
+        pollId = setInterval(function() {
+            var span = luaLink.querySelector('span');
+            var text = span ? span.innerText : '';
+            if (text === lastText) return;
+            lastText = text;
+
+            if (SLS_FAIL_TEXTS.test(text)) {
+                clearInterval(crawlId);
+                finish(false);
+                return;
+            }
+            if (/installed!?/i.test(text)) {
+                clearInterval(crawlId);
+                finish(true);
+                return;
+            }
+            for (var i = 0; i < SLS_PHASE_MAP.length; i++) {
+                if (SLS_PHASE_MAP[i].match.test(text)) {
+                    setTarget(SLS_PHASE_MAP[i].pct);
+                    break;
+                }
+            }
+        }, 150);
     }
 
     function openLuaProviderConfig(appid) {
@@ -67,24 +211,26 @@
         overlay.id = 'sls-overlay-modal';
         overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(10,12,18,0.85);z-index:999999;display:flex;justify-content:center;align-items:center;backdrop-filter:blur(8px);';
         var order = getProviderOrder();
+        var requestedProviders = {};
+
         var rows = '';
         order.forEach(function(providerIndex, position) {
             var provider = luaProviders[providerIndex];
             var apiKey = localStorage.getItem(provider.key) || '';
-            rows += '<div data-sls-provider="' + providerIndex + '" style="display:flex;align-items:center;gap:8px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.08);">' +
-                '<strong style="flex:1;color:#f5f6f8;font-size:13px;">' + provider.name + '</strong>' +
-                '<div style="display:flex;align-items:center;gap:6px;min-width:190px;border:1px solid #3b4252;border-radius:5px;padding:3px 6px;">' +
+            rows += '<div data-sls-provider="' + providerIndex + '" style="position:relative;overflow:hidden;display:flex;align-items:center;gap:8px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.08);">' +
+                '<strong style="position:relative;z-index:1;flex:1;color:#f5f6f8;font-size:13px;">' + provider.name + '</strong>' +
+                '<div style="position:relative;z-index:1;display:flex;align-items:center;gap:6px;min-width:190px;border:1px solid #3b4252;border-radius:5px;padding:3px 6px;">' +
                 '<span title="API key" aria-hidden="true" style="color:#a5b4fc;font-size:15px;">&#128273;</span>' +
                 '<input data-sls-api-key="' + providerIndex + '" aria-label="API key for ' + escapeHtml(provider.name) + '" value="' + escapeHtml(apiKey) + '" placeholder="API key" type="text" style="min-width:0;flex:1;background:transparent;border:0;outline:0;color:#f5f6f8;padding:5px 2px;font-size:12px;" />' +
                 '</div>' +
-                '<button data-sls-up="' + providerIndex + '" title="Move provider up" style="margin-right:4px;background:#252a36;border:0;color:#d6d7d9;padding:5px 8px;border-radius:5px;cursor:pointer;"' + (position === 0 ? ' disabled' : '') + '>Up</button>' +
-                '<button data-sls-down="' + providerIndex + '" title="Move provider down" style="margin-right:4px;background:#252a36;border:0;color:#d6d7d9;padding:5px 8px;border-radius:5px;cursor:pointer;"' + (position === order.length - 1 ? ' disabled' : '') + '>Down</button>' +
-                '<button data-sls-provider-download="' + providerIndex + '" style="margin-right:4px;background:#1a9fff;border:0;color:#fff;padding:5px 9px;border-radius:5px;cursor:pointer;">Download</button>' +
+                '<button data-sls-up="' + providerIndex + '" title="Move provider up" style="position:relative;z-index:1;margin-right:4px;background:#252a36;border:0;color:#d6d7d9;padding:5px 8px;border-radius:5px;cursor:pointer;"' + (position === 0 ? ' disabled' : '') + '>Up</button>' +
+                '<button data-sls-down="' + providerIndex + '" title="Move provider down" style="position:relative;z-index:1;margin-right:4px;background:#252a36;border:0;color:#d6d7d9;padding:5px 8px;border-radius:5px;cursor:pointer;"' + (position === order.length - 1 ? ' disabled' : '') + '>Down</button>' +
+                '<button data-sls-provider-download="' + providerIndex + '" style="position:relative;z-index:1;margin-right:4px;background:#1a9fff;border:0;color:#fff;padding:5px 9px;border-radius:5px;cursor:pointer;">Download</button>' +
                 '</div>';
         });
         overlay.innerHTML = '<div style="background:#161920;border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:24px;width:auto;max-width:calc(100% - 32px);box-shadow:0 20px 50px rgba(0,0,0,0.6);font-family:Arial,sans-serif;color:#f5f6f8;">' +
             '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;"><div><h2 style="margin:0;font-size:20px;">Lua download provider</h2><p style="margin:5px 0 0;color:#8f98a0;font-size:12px;">AppID: ' + appid + '</p></div><button id="sls-provider-close" style="margin-right:4px;background:transparent;border:0;color:#9ca3af;font-size:20px;cursor:pointer;">X</button></div>' +
-            '<div>' + rows + '</div>' +
+            '<div id="sls-provider-rows">' + rows + '</div>' +
             '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px;"><button id="sls-auto-search" style="min-width:100%;background:#4f46e5;border:0;color:#fff;padding:9px 14px;border-radius:6px;cursor:pointer;font-weight:600;">Auto Download</button></div>' +
             '</div>';
         document.body.appendChild(overlay);
@@ -93,10 +239,149 @@
         document.getElementById('sls-provider-close').onclick = close;
         var cancelButton = document.getElementById('sls-provider-cancel');
         if (cancelButton) cancelButton.onclick = close;
+
+        function disableProviderBtn(pIdx) {
+            var btn = overlay.querySelector('[data-sls-provider-download="' + pIdx + '"]');
+            if (btn) {
+                btn.disabled = true;
+                btn.style.opacity = '0.4';
+                btn.style.cursor = 'not-allowed';
+            }
+        }
+
+        function findProviderIndexFromText(text) {
+            if (!text) return -1;
+            var lower = text.toLowerCase();
+            for (var i = 0; i < luaProviders.length; i++) {
+                var keyName = luaProviders[i].name.split(' ')[0].toLowerCase();
+                if (lower.indexOf(keyName) !== -1) {
+                    return i;
+                }
+            }
+            return -1;
+        }
+
+        // ── startModalDownloadTracking ───────────────────────────────────────
+        // Tracks single or auto download progress sequentially. As C++ reports
+        // "Trying <Provider>", only the provider being tried fills green.
+        // If it fails and moves to the next provider, the failed provider turns RED
+        // and the next provider starts filling GREEN.
+        function startModalDownloadTracking(allowedIndices) {
+            if (!allowedIndices || allowedIndices.length === 0) return;
+            injectLoadingBarStyles();
+
+            var currentActiveIdx = allowedIndices[0];
+            var targetPct = 5;
+            var finished = false;
+            var lastText = '';
+
+            function getOrCreateBar(pIdx) {
+                var rowEl = overlay.querySelector('[data-sls-provider="' + pIdx + '"]');
+                if (!rowEl) return null;
+                var bar = rowEl.querySelector('.sls-bar-fill');
+                if (!bar) {
+                    bar = document.createElement('div');
+                    bar.className = 'sls-bar-fill';
+                    rowEl.insertBefore(bar, rowEl.firstChild);
+                }
+                return bar;
+            }
+
+            var initialBar = getOrCreateBar(currentActiveIdx);
+            if (initialBar) initialBar.style.width = '5%';
+
+            // Crawl active bar smoothly up to targetPct
+            var crawlId = setInterval(function() {
+                if (finished || currentActiveIdx === -1) return;
+                var bar = getOrCreateBar(currentActiveIdx);
+                if (!bar) return;
+                var cur = parseFloat(bar.style.width) || 0;
+                if (cur < targetPct) {
+                    var step = Math.max(0.05, (targetPct - cur) * 0.04);
+                    bar.style.width = Math.min(targetPct, cur + step) + '%';
+                }
+            }, 80);
+
+            function finishTracking(success) {
+                if (finished) return;
+                finished = true;
+                clearInterval(crawlId);
+                clearInterval(pollId);
+
+                if (currentActiveIdx !== -1) {
+                    var bar = getOrCreateBar(currentActiveIdx);
+                    if (bar) {
+                        bar.style.width = '100%';
+                        bar.classList.add(success ? 'sls-bar-done' : 'sls-bar-fail');
+                    }
+                }
+            }
+
+            var pollId = setInterval(function() {
+                var pageBtn = document.querySelector('.sls-lua-btn[data-sls-appid="' + appid + '"]');
+                var span    = pageBtn ? pageBtn.querySelector('a span') : null;
+                var text    = span ? span.innerText : '';
+                if (text === lastText) return;
+                lastText = text;
+
+                if (SLS_FAIL_TEXTS.test(text)) {
+                    finishTracking(false);
+                    return;
+                }
+                if (/installed!?/i.test(text)) {
+                    finishTracking(true);
+                    return;
+                }
+
+                // Match status text to a specific provider (e.g. "Trying DepotBox...")
+                var foundIdx = findProviderIndexFromText(text);
+                if (foundIdx !== -1 && allowedIndices.indexOf(foundIdx) !== -1) {
+                    if (currentActiveIdx !== -1 && currentActiveIdx !== foundIdx) {
+                        // Previous provider failed! Snap its bar to 100% red
+                        var prevBar = getOrCreateBar(currentActiveIdx);
+                        if (prevBar) {
+                            prevBar.style.width = '100%';
+                            prevBar.classList.add('sls-bar-fail');
+                        }
+                        targetPct = 5;
+                    }
+                    currentActiveIdx = foundIdx;
+                    targetPct = Math.max(targetPct, 35);
+                    var newBar = getOrCreateBar(currentActiveIdx);
+                    if (newBar && parseFloat(newBar.style.width || 0) < 5) {
+                        newBar.style.width = '5%';
+                    }
+                }
+
+                for (var i = 0; i < SLS_PHASE_MAP.length; i++) {
+                    if (SLS_PHASE_MAP[i].match.test(text)) {
+                        if (SLS_PHASE_MAP[i].pct > targetPct) {
+                            targetPct = SLS_PHASE_MAP[i].pct;
+                        }
+                        break;
+                    }
+                }
+            }, 150);
+        }
+
+        // Auto Download — try only unrequested providers sequentially
         document.getElementById('sls-auto-search').onclick = function() {
-            close();
-            sendLuaRequest(appid, null);
+            var fullOrder = getProviderOrder();
+            var remainingOrder = fullOrder.filter(function(pIdx) {
+                return !requestedProviders[pIdx];
+            });
+
+            if (remainingOrder.length === 0) return;
+
+            remainingOrder.forEach(function(pIdx) {
+                requestedProviders[pIdx] = true;
+                disableProviderBtn(pIdx);
+            });
+
+            startModalDownloadTracking(remainingOrder);
+            sendLuaRequest(appid, null, remainingOrder);
         };
+
         overlay.querySelectorAll('[data-sls-api-key]').forEach(function(input) {
             function saveApiKey() {
                 var provider = luaProviders[parseInt(input.getAttribute('data-sls-api-key'), 10)];
@@ -114,22 +399,45 @@
         });
         overlay.querySelectorAll('[data-sls-up], [data-sls-down]').forEach(function(button) {
             button.onclick = function() {
-                var providerIndex = parseInt(button.getAttribute('data-sls-up') || button.getAttribute('data-sls-down'), 10);
-                var current = getProviderOrder();
-                var from = current.indexOf(providerIndex);
-                var to = button.hasAttribute('data-sls-up') ? from - 1 : from + 1;
-                if (from < 0 || to < 0 || to >= current.length) return;
-                current.splice(from, 1);
-                current.splice(to, 0, providerIndex);
-                saveProviderOrder(current);
-                close();
-                openLuaProviderConfig(appid);
+                var isUp = button.hasAttribute('data-sls-up');
+                var rowEl = button.closest ? button.closest('[data-sls-provider]') : button.parentElement;
+                if (!rowEl) return;
+                var container = rowEl.parentElement;
+                if (!container) return;
+
+                if (isUp) {
+                    var prev = rowEl.previousElementSibling;
+                    if (prev) container.insertBefore(rowEl, prev);
+                } else {
+                    var next = rowEl.nextElementSibling;
+                    if (next) container.insertBefore(next, rowEl);
+                }
+
+                var allRows = Array.from(container.children);
+                var newOrder = allRows.map(function(child) {
+                    return parseInt(child.getAttribute('data-sls-provider'), 10);
+                });
+                saveProviderOrder(newOrder);
+
+                allRows.forEach(function(child, idx) {
+                    var upBtn = child.querySelector('[data-sls-up]');
+                    var downBtn = child.querySelector('[data-sls-down]');
+                    if (upBtn) upBtn.disabled = (idx === 0);
+                    if (downBtn) downBtn.disabled = (idx === allRows.length - 1);
+                });
             };
         });
+        // Single provider download — block only the requested provider, modal stays open
         overlay.querySelectorAll('[data-sls-provider-download]').forEach(function(button) {
             button.onclick = function() {
-                close();
-                sendLuaRequest(appid, parseInt(button.getAttribute('data-sls-provider-download'), 10));
+                var pIdx = parseInt(button.getAttribute('data-sls-provider-download'), 10);
+                if (requestedProviders[pIdx]) return;
+
+                requestedProviders[pIdx] = true;
+                disableProviderBtn(pIdx);
+
+                startModalDownloadTracking([pIdx]);
+                sendLuaRequest(appid, pIdx);
             };
         });
     }
@@ -148,6 +456,20 @@
             openLuaProviderConfig(productID);
         };
     }
+
+    /**
+     * Called by the C++ side via CDP injection when a download completes or
+     * fails while the store page is open (i.e. pushStatus calls come through
+     * as innerText changes on the button span).  The loading bar already polls
+     * those text changes via startRowLoadingBar — no extra wiring needed here.
+     * This hook exists so any future direct-JS callers can still trigger bars.
+     */
+    function slsTriggerLoadingBar(productID) {
+        var btn  = document.querySelector('.sls-lua-btn[data-sls-appid="' + productID + '"]');
+        var link = btn ? btn.querySelector('a') : null;
+        if (btn && link) startRowLoadingBar(btn, link);
+    }
+    window.slsTriggerLoadingBar = slsTriggerLoadingBar;
 
     function setupRemoveButton(luaLink, luaBtn, productID, cartBtn) {
         var span = luaLink.querySelector('span');
@@ -323,6 +645,7 @@
                 luaBtn.classList.remove('btn_add_to_cart');
                 luaBtn.classList.add('sls-lua-btn');
                 luaBtn.dataset.slsProcessed = '1';
+                luaBtn.dataset.slsAppid = productID;
                 luaBtn.style.display = 'inline-block';
                 luaBtn.style.marginRight = '4px';
                 luaBtn.style.float = 'right';
