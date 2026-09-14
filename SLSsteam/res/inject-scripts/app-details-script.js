@@ -89,7 +89,7 @@
                 delete pendingChecks[containerKey];
 
                 if (data.exists || data.pending) {
-                    createRemoveButton(manageContainer, appid, data.pending, data.onlineFixInstalled, data.autoCrackInstalled);
+                    createRemoveButton(manageContainer, appid, data.pending, data.onlineFixInstalled, data.autoCrackInstalled, data.provider);
                 } else {
                     noLuaAppIds[appid] = true;
                 }
@@ -255,18 +255,151 @@
             });
     }
 
-    function createRemoveButton(manageContainer, appid, isPending, onlineFixInstalled, autoCrackInstalled) {
+    var luaProviders = [
+        { name: 'Ryuu' },
+        { name: 'DepotBox' },
+        { name: 'HubcapDB' },
+        { name: 'Morrenus' },
+        { name: 'Sushi' },
+        { name: 'Spinoza' },
+        { name: 'TwentyTwo Cloud' }
+    ];
+
+    function openChangeProviderModal(appid, currentProvider) {
+        if (document.getElementById('sls-provider-modal')) return;
+        var overlay = document.createElement('div');
+        overlay.id = 'sls-provider-modal';
+        overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(10,12,18,0.85);z-index:999999;display:flex;justify-content:center;align-items:center;backdrop-filter:blur(8px);transition:all 0.3s ease;opacity:0;';
+
+        var rows = '';
+        for (var i = 0; i < luaProviders.length; i++) {
+            var isCurrent = currentProvider && currentProvider.toLowerCase().indexOf(luaProviders[i].name.toLowerCase()) !== -1;
+            var badgeHtml = isCurrent ? '<span style="margin-left:8px;font-size:10px;padding:2px 8px;background:rgba(99,102,241,0.25);border:1px solid rgba(99,102,241,0.4);border-radius:4px;color:#a5b4fc;">Current</span>' : '';
+            var btnStyle = isCurrent
+                ? 'background:rgba(99,102,241,0.15);border:1px solid rgba(99,102,241,0.3);color:#a5b4fc;cursor:default;opacity:0.6;'
+                : 'background:linear-gradient(135deg,#0ea5e9 0%,#0284c7 100%);border:none;color:#fff;cursor:pointer;';
+            rows += '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;margin-bottom:6px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:8px;">' +
+                '<span style="flex:1;color:#f5f6f8;font-size:13px;font-weight:600;">' + luaProviders[i].name + badgeHtml + '</span>' +
+                '<button data-sls-provider-idx="' + i + '" ' + (isCurrent ? 'disabled ' : '') + 'style="' + btnStyle + 'padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;transition:all 0.2s;">' + (isCurrent ? 'Active' : 'Use') + '</button>' +
+            '</div>';
+        }
+
+        var cardHtml = '<div style="background:linear-gradient(145deg,#161920 0%,#0d0f14 100%);border:1px solid rgba(255,255,255,0.08);border-radius:16px;padding:28px;width:420px;box-shadow:0 20px 50px rgba(0,0,0,0.6);font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;color:#f5f6f8;transition:all 0.3s cubic-bezier(0.16,1,0.3,1);transform:scale(0.95);opacity:0;" id="sls-provider-card">' +
+            '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">' +
+                '<div>' +
+                    '<h2 style="margin:0;font-size:20px;font-weight:700;background:linear-gradient(90deg,#fff 0%,#a5aab6 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;">Change Provider</h2>' +
+                    '<p style="margin:4px 0 0;font-size:12px;color:#6b7280;font-weight:500;">AppID: <span style="color:#9ca3af;font-family:monospace;">' + appid + '</span></p>' +
+                '</div>' +
+                '<button id="sls-prov-close" style="background:rgba(255,255,255,0.05);border:none;color:#9ca3af;font-size:20px;cursor:pointer;width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;transition:all 0.2s;">&times;</button>' +
+            '</div>' +
+            '<div id="sls-provider-list" style="max-height:320px;overflow-y:auto;margin-bottom:16px;">' + rows + '</div>' +
+            '<div id="sls-prov-status" style="display:none;text-align:center;padding:12px;font-size:13px;color:#a5b4fc;background:rgba(99,102,241,0.1);border:1px solid rgba(99,102,241,0.2);border-radius:8px;margin-bottom:16px;"></div>' +
+            '<div style="display:flex;justify-content:flex-end;">' +
+                '<button id="sls-prov-cancel" style="background:transparent;border:1px solid rgba(255,255,255,0.1);color:#9ca3af;padding:10px 20px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;transition:all 0.2s;">Close</button>' +
+            '</div>' +
+        '</div>';
+
+        overlay.innerHTML = cardHtml;
+
+        var style = document.createElement('style');
+        style.textContent = '#sls-prov-close:hover { background: rgba(255,255,255,0.1) !important; color: #fff !important; }' +
+            ' #sls-prov-cancel:hover { background: rgba(255,255,255,0.03) !important; color: #fff !important; border-color: rgba(255,255,255,0.2) !important; }' +
+            ' [data-sls-provider-idx]:not(:disabled):hover { filter: brightness(1.15); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.3); }';
+        overlay.appendChild(style);
+        document.body.appendChild(overlay);
+
+        requestAnimationFrame(function() {
+            overlay.style.opacity = '1';
+            var card = document.getElementById('sls-provider-card');
+            if (card) { card.style.transform = 'scale(1)'; card.style.opacity = '1'; }
+        });
+
+        function closeModal() {
+            overlay.style.opacity = '0';
+            var card = document.getElementById('sls-provider-card');
+            if (card) { card.style.transform = 'scale(0.95)'; card.style.opacity = '0'; }
+            setTimeout(function() { overlay.remove(); }, 300);
+        }
+
+        document.getElementById('sls-prov-close').onclick = closeModal;
+        document.getElementById('sls-prov-cancel').onclick = closeModal;
+
+        var provBtns = overlay.querySelectorAll('[data-sls-provider-idx]');
+        provBtns.forEach(function(btn) {
+            btn.onclick = function(e) {
+                e.preventDefault(); e.stopPropagation();
+                var idx = btn.getAttribute('data-sls-provider-idx');
+                var statusEl = document.getElementById('sls-prov-status');
+                statusEl.style.display = 'block';
+                statusEl.innerText = 'Switching to ' + luaProviders[idx].name + '...';
+
+                // Disable all buttons
+                provBtns.forEach(function(b) { b.disabled = true; b.style.opacity = '0.5'; b.style.cursor = 'default'; });
+
+                fetch('http://127.0.0.1:9001/change-provider?id=' + appid + '&provider=' + idx)
+                    .then(function(r) { return r.json(); })
+                    .then(function(data) {
+                        if (data.success) {
+                            statusEl.innerText = 'Download started from ' + luaProviders[idx].name + '. Please wait...';
+                            statusEl.style.background = 'rgba(16,185,129,0.1)';
+                            statusEl.style.borderColor = 'rgba(16,185,129,0.3)';
+                            statusEl.style.color = '#6ee7b7';
+                            
+                            var pollCount = 0;
+                            var lastStatus = '';
+                            var timer = setInterval(function() {
+                                var btn = document.querySelector('.sls-lua-btn[data-sls-appid="' + appid + '"]');
+                                if (!btn) return;
+                                var currentStatus = btn.dataset.slsStatus;
+                                if (currentStatus && currentStatus !== lastStatus) {
+                                    lastStatus = currentStatus;
+                                    statusEl.innerText = currentStatus;
+                                    
+                                    if (/installed!?/i.test(currentStatus)) {
+                                        clearInterval(timer);
+                                        statusEl.style.color = '#34d399';
+                                        var pl = document.querySelector('.sls-provider-label');
+                                        if (pl) pl.innerHTML = 'Provider: <span style="color:#a5b4fc;font-weight:600;">' + luaProviders[idx].name + '</span>';
+                                        provBtns.forEach(function(b) { b.disabled = false; b.style.opacity = '1'; b.style.cursor = 'pointer'; });
+                                    }
+                                    else if (/not available|failed|error|invalid/i.test(currentStatus)) {
+                                        clearInterval(timer);
+                                        statusEl.style.color = '#fca5a5';
+                                        statusEl.style.background = 'rgba(239,68,68,0.1)';
+                                        statusEl.style.borderColor = 'rgba(239,68,68,0.3)';
+                                        provBtns.forEach(function(b) { b.disabled = false; b.style.opacity = '1'; b.style.cursor = 'pointer'; });
+                                    }
+                                }
+                                pollCount++;
+                                if (pollCount > 600) clearInterval(timer);
+                            }, 500);
+
+                        } else {
+                            statusEl.innerText = 'Failed to start download.';
+                            statusEl.style.color = '#fca5a5';
+                        }
+                    })
+                    .catch(function() {
+                        statusEl.innerText = 'Connection error.';
+                        statusEl.style.color = '#fca5a5';
+                    });
+            };
+        });
+    }
+
+    function createRemoveButton(manageContainer, appid, isPending, onlineFixInstalled, autoCrackInstalled, provider) {
         var parentNode = manageContainer.parentNode;
 
         // Remove any existing SLS buttons from this container before re-inserting
         parentNode.querySelectorAll(
-            '.sls-remove-lua-btn, .sls-config-btn'
+            '.sls-remove-lua-btn, .sls-config-btn, .sls-provider-label, .sls-change-provider-btn'
         ).forEach(function(el) { el.remove(); });
 
         // 1. Remove Lua Button
         var removeBtn = document.createElement('div');
-        removeBtn.className = 'sls-remove-lua-btn';
-        removeBtn.dataset.slsAppId = appid;
+        removeBtn.className = 'sls-remove-lua-btn sls-lua-btn';
+        removeBtn.dataset.slsAppid = appid; // lowercase 'i' for data-sls-appid
+        removeBtn.dataset.slsAppId = appid; // keep camelCase one just in case
         removeBtn.style.display = 'inline-block';
         removeBtn.style.marginRight = '8px';
         
@@ -358,6 +491,38 @@
             };
         };
 
+        // 3. Change Provider Button
+        var changeProvBtn = document.createElement('div');
+        changeProvBtn.className = 'sls-change-provider-btn';
+        changeProvBtn.dataset.slsAppId = appid;
+        changeProvBtn.style.display = 'inline-block';
+        changeProvBtn.style.marginRight = '8px';
+        
+        var changeLink = document.createElement('a');
+        changeLink.href = 'javascript:void(0)';
+        changeLink.style.cssText = 'display: inline-block; background: linear-gradient(to right, #75b022 5%, #588a1b 95%); border-radius: 2px; padding: 1px; cursor: pointer; text-decoration: none; filter: hue-rotate(280deg) brightness(1.1); box-shadow: 0 1px 3px rgba(0,0,0,0.4);';
+        
+        var changeSpan = document.createElement('span');
+        changeSpan.style.cssText = 'display: block; background: transparent; padding: 0 15px; font-size: 15px; line-height: 30px; color: #d2efa9; text-shadow: 1px 1px 2px rgba(0,0,0,0.3); font-family: "Motiva Sans", sans-serif;';
+        changeSpan.innerText = 'Change Provider';
+        
+        changeLink.appendChild(changeSpan);
+        changeProvBtn.appendChild(changeLink);
+
+        changeLink.onclick = function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            openChangeProviderModal(appid, provider || '');
+        };
+
+        // 4. Provider label
+        var providerLabel = document.createElement('div');
+        providerLabel.className = 'sls-provider-label';
+        providerLabel.style.cssText = 'display:inline-block;margin-right:8px;padding:0 10px;font-size:12px;line-height:30px;color:#8a8d96;font-family:"Motiva Sans",sans-serif;vertical-align:middle;';
+        if (provider) {
+            providerLabel.innerHTML = 'Provider: <span style="color:#a5b4fc;font-weight:600;">' + provider + '</span>';
+        }
+
         // Mark this container as injected BEFORE inserting DOM nodes so the
         // MutationObserver callback that fires during insertion sees the guard
         // already set and skips re-entry.
@@ -365,7 +530,9 @@
 
         // Insert SLS buttons BEFORE the Manage gear (manageContainer),
         // so they appear first in the row. Reverse insertion order keeps
-        // visual order: Remove Lua → Config.
+        // visual order: Remove Lua → Config → Change Provider → Provider Label.
+        if (provider) parentNode.insertBefore(providerLabel, parentNode.firstChild);
+        parentNode.insertBefore(changeProvBtn, parentNode.firstChild);
         parentNode.insertBefore(configBtn, parentNode.firstChild);
         parentNode.insertBefore(removeBtn, parentNode.firstChild);
     }

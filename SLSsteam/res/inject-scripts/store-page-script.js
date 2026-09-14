@@ -292,9 +292,9 @@
             var pIdx = parseInt(pIdxStr, 10);
             var btn = overlay.querySelector('[data-sls-provider-download="' + pIdx + '"]');
             if (btn) {
-                btn.disabled = true;
-                btn.style.opacity = '0.4';
-                btn.style.cursor = 'not-allowed';
+                // btn.disabled = true;
+                // btn.style.opacity = '0.4';
+                // btn.style.cursor = 'not-allowed';
             }
         });
 
@@ -493,9 +493,9 @@
         function disableProviderBtn(pIdx) {
             var btn = overlay.querySelector('[data-sls-provider-download="' + pIdx + '"]');
             if (btn) {
-                btn.disabled = true;
-                btn.style.opacity = '0.4';
-                btn.style.cursor = 'not-allowed';
+                // btn.disabled = true;
+                // btn.style.opacity = '0.4';
+                // btn.style.cursor = 'not-allowed';
             }
         }
 
@@ -561,7 +561,7 @@
         overlay.querySelectorAll('[data-sls-provider-download]').forEach(function(button) {
             button.onclick = function() {
                 var pIdx = parseInt(button.getAttribute('data-sls-provider-download'), 10);
-                if (requestedProviders[pIdx]) return;
+                // if (requestedProviders[pIdx]) return;
 
                 startGlobalDownloadTracking(appid, [pIdx]);
                 sendLuaRequest(appid, pIdx);
@@ -628,7 +628,7 @@
                 var confirmBtn = document.getElementById('sls-rm-confirm');
                 confirmBtn.innerText = 'Processing...';
                 confirmBtn.style.opacity = '0.5';
-                confirmBtn.style.pointerEvents = 'none';
+                // confirmBtn.style.pointerEvents = 'none';
 
                 ping('Remove Lua: ' + productID);
                 window.location.hash = 'sls-click-removelua-' + productID + '-' + Date.now();
@@ -799,7 +799,16 @@
                     var initialSpan = luaLink.querySelector('span');
                     if (initialSpan) initialSpan.innerText = 'Checking Lua...';
                     luaLink.style.filter = 'hue-rotate(200deg) brightness(1.0)';
-                    luaLink.style.pointerEvents = 'none';
+                    // luaLink.style.pointerEvents = 'none';
+                    
+                    // Allow clicking even while checking
+                    luaLink.onclick = function(e) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        luaBtn.dataset.slsAppid = productID;
+                        ping('Lua Click (early): ' + productID);
+                        openLuaProviderConfig(productID);
+                    };
 
                     // Check unlock status via callback server
                     if (appUnlockStatus[productID] !== undefined) {

@@ -564,6 +564,12 @@ namespace StoreInject
                                                     std::filesystem::remove(luaPath);
                                                     LOG_INFO("RemoveLua: Deleted lua file %s\n", luaPath.c_str());
                                                 }
+                                                // Remove provider sidecar
+                                                auto providerPath = std::filesystem::path(pluginDir) / (pid + ".provider");
+                                                if (std::filesystem::exists(providerPath)) {
+                                                    std::filesystem::remove(providerPath);
+                                                    LOG_INFO("RemoveLua: Deleted provider file %s\n", providerPath.c_str());
+                                                }
                                                 
                                                 // Remove manifests from pluginDir
                                                 for (const auto& entry : std::filesystem::directory_iterator(pluginDir)) {
@@ -637,7 +643,7 @@ namespace StoreInject
                                     LOG_INFO("Download Lua provider %d clicked for Product ID: %s\n", providerIndex, productId.c_str());
                                     std::string pid = productId;
                                     std::thread([pid, providerIndex]() {
-                                        LuaDownload::downloadAndInstall(pid, providerIndex);
+                                        LuaDownload::downloadAndInstall(pid, providerIndex, {}, true);
                                     }).detach();
                                 }
                             }
@@ -664,7 +670,7 @@ namespace StoreInject
                                 lastProcessedTimestamp = timestamp;
                                 LOG_INFO("Auto-search Lua download clicked for Product ID: %s\n", pid.c_str());
                                 std::thread([pid, order]() {
-                                    LuaDownload::downloadAndInstall(pid, -1, order);
+                                    LuaDownload::downloadAndInstall(pid, -1, order, true);
                                 }).detach();
                             }
                         }
@@ -938,6 +944,25 @@ namespace StoreInject
                                     bool onlineFixInstalled = Apps::isOnlineFixInstalled(appId);
                                     bool autoCrackInstalled = Apps::isAutoCrackInstalled(appId);
                                     bool paused = CppAccela::Download::isPaused(appId);
+
+                                    // Read provider name from sidecar file
+                                    std::string providerName;
+                                    if (!pluginDir.empty()) {
+                                        auto providerPath = std::filesystem::path(pluginDir) / (idStr + ".provider");
+                                        if (std::filesystem::exists(providerPath)) {
+                                            std::ifstream pf(providerPath);
+                                            if (pf.is_open()) {
+                                                std::getline(pf, providerName);
+                                            }
+                                        }
+                                    }
+
+                                    // Escape quotes in provider name for JSON
+                                    std::string escapedProvider;
+                                    for (char c : providerName) {
+                                        if (c == '"' || c == '\\') escapedProvider += '\\';
+                                        escapedProvider += c;
+                                    }
                                     
                                     std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n";
                                     response += "{\"exists\":" + std::string(exists ? "true" : "false") + 
@@ -945,7 +970,8 @@ namespace StoreInject
                                                ",\"downloading\":" + std::string(downloading ? "true" : "false") +
                                                ",\"paused\":" + std::string(paused ? "true" : "false") +
                                                ",\"onlineFixInstalled\":" + std::string(onlineFixInstalled ? "true" : "false") +
-                                               ",\"autoCrackInstalled\":" + std::string(autoCrackInstalled ? "true" : "false") + "}";
+                                               ",\"autoCrackInstalled\":" + std::string(autoCrackInstalled ? "true" : "false") +
+                                               ",\"provider\":\"" + escapedProvider + "\"}";
                                     send(new_socket, response.c_str(), response.size(), 0);
                                     close(new_socket);
                                     handled = true;
@@ -1340,6 +1366,50 @@ namespace StoreInject
                                 close(new_socket);
                             }
                         }
+                        else if (request.find("/change-provider?") != std::string::npos)
+                        {
+                            try {
+                                size_t idPos = request.find("id=");
+                                size_t provPos = request.find("provider=");
+                                if (idPos != std::string::npos && provPos != std::string::npos)
+                                {
+                                    size_t idEnd = request.find_first_of(" &", idPos + 3);
+                                    std::string idStr = request.substr(idPos + 3, (idEnd == std::string::npos) ? std::string::npos : (idEnd - (idPos + 3)));
+                                    size_t provEnd = request.find_first_of(" &", provPos + 9);
+                                    std::string provStr = request.substr(provPos + 9, (provEnd == std::string::npos) ? std::string::npos : (provEnd - (provPos + 9)));
+                                    int providerIndex = std::stoi(provStr);
+                                    uint32_t appId = std::stoul(idStr);
+
+                                    LOG_INFO("StoreInject: Change provider for AppID %u to provider %d\n", appId, providerIndex);
+
+                                    // We DO NOT delete the existing lua, provider, or manifest files here!
+                                    // If the download from the new provider fails, the user will still have their old working game.
+                                    // Old manifests will be cleaned up in LuaDownload::downloadAndInstall right before success.
+
+                                    // Also remove cached zip so a fresh download is forced
+                                    {
+                                        const char* home = getenv("HOME");
+                                        std::string cachePath = std::string(home ? home : "/tmp") + "/.cache/SLSsteam/downloads/" + idStr + ".zip";
+                                        std::filesystem::remove(cachePath);
+                                    }
+
+                                    // Re-download from the selected provider in a background thread
+                                    std::string pid = idStr;
+                                    std::thread([pid, providerIndex]() {
+                                        LuaDownload::downloadAndInstall(pid, providerIndex, {}, true);
+                                    }).detach();
+
+                                    std::string respBody = "{\"success\":true}";
+                                    std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: " + std::to_string(respBody.size()) + "\r\n\r\n" + respBody;
+                                    send(new_socket, response.c_str(), response.size(), 0);
+                                    close(new_socket);
+                                    handled = true;
+                                }
+                            } catch (...) {
+                                handled = false;
+                                close(new_socket);
+                            }
+                        }
                         else if (request.find("/remove?id=") != std::string::npos)
                         {
                             size_t idPos = request.find("id=");
@@ -1393,6 +1463,15 @@ namespace StoreInject
                                             }
                                         }
                                     } catch(...) {}
+
+                                    // 2b. Remove provider sidecar
+                                    {
+                                        auto providerPath = std::filesystem::path(pluginDir) / (idStr + ".provider");
+                                        if (std::filesystem::exists(providerPath)) {
+                                            std::filesystem::remove(providerPath);
+                                            LOG_INFO("RemoveLua: Deleted provider file %s\n", providerPath.c_str());
+                                        }
+                                    }
 
                                     // 3. Remove manifests from depotcache
                                     std::filesystem::path configPath = std::filesystem::path(pluginDir).parent_path();

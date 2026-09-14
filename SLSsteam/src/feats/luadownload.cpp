@@ -84,12 +84,14 @@ namespace LuaDownload
         auto pages = CDPInject::fetchPages();
         std::string matchApp = "/app/" + appId;
         std::string matchSub = "/sub/" + appId;
+        std::string matchLib = "app_" + appId;
 
         for (auto& page : pages)
         {
             if (page.webSocketDebuggerUrl.empty()) continue;
             if (page.url.find(matchApp) == std::string::npos &&
-                page.url.find(matchSub) == std::string::npos)
+                page.url.find(matchSub) == std::string::npos &&
+                page.url.find(matchLib) == std::string::npos)
                 continue;
 
             // Build JS to update button
@@ -246,7 +248,8 @@ namespace LuaDownload
     // ── Main download & install ────────────────────────────────────────
 
     bool downloadAndInstall(const std::string& appId, int providerIndex,
-                            const std::vector<int>& providerOrder)
+                            const std::vector<int>& providerOrder,
+                            bool forceDownload)
     {
         LOG_INFO("LuaDownload: Starting download for appid=%s\n", appId.c_str());
         pushStatus(appId, "Checking APIs...");
@@ -290,15 +293,23 @@ namespace LuaDownload
                 }
             }
 
-            if (luaValid)
+            if (forceDownload)
             {
-                LOG_INFO("LuaDownload: Lua script already exists for appid=%s, skipping\n", appId.c_str());
-                pushStatus(appId, "Already installed", "hue-rotate(110deg) brightness(1.2)");
-                return true;
+                LOG_INFO("LuaDownload: Force download requested for appid=%s, bypassing already-installed check\n", appId.c_str());
+                // Do NOT delete existingLua here. If the new download fails, we want to keep it!
             }
+            else
+            {
+                if (luaValid)
+                {
+                    LOG_INFO("LuaDownload: Lua script already exists for appid=%s, skipping\n", appId.c_str());
+                    pushStatus(appId, "Already installed", "hue-rotate(110deg) brightness(1.2)");
+                    return true;
+                }
 
-            LOG_INFO("LuaDownload: Existing lua for appid=%s is invalid/mismatched, re-downloading\n", appId.c_str());
-            std::filesystem::remove(existingLua);
+                LOG_INFO("LuaDownload: Existing lua for appid=%s is invalid/mismatched, re-downloading\n", appId.c_str());
+                std::filesystem::remove(existingLua);
+            }
         }
 
         // Temp directory for this download
@@ -501,6 +512,18 @@ namespace LuaDownload
 
         pushStatus(appId, "Installing...");
 
+        // Clean up any old manifests from previous provider in depotcache to prevent orphan bloat
+        try {
+            for (const auto& entry : std::filesystem::directory_iterator(depotcacheDir)) {
+                if (entry.is_regular_file() && entry.path().extension() == ".manifest") {
+                    std::string stem = entry.path().stem().string();
+                    if (stem.find(appId) == 0) {
+                        std::filesystem::remove(entry.path());
+                    }
+                }
+            }
+        } catch (...) {}
+
         // Install manifest files to depotcache
         for (const auto& manifestPath : files.manifestFiles)
         {
@@ -535,6 +558,17 @@ namespace LuaDownload
 
         LOG_INFO("LuaDownload: Installed lua -> %s (via %s)\n",
                       existingLua.c_str(), successApi.c_str());
+
+        // Save provider name to a sidecar file so the UI can show it
+        {
+            std::string providerPath = stplugDir + "/" + appId + ".provider";
+            std::ofstream providerFile(providerPath, std::ios::trunc);
+            if (providerFile.is_open())
+            {
+                providerFile << successApi;
+                LOG_DEBUG("LuaDownload: Saved provider info -> %s\n", providerPath.c_str());
+            }
+        }
 
         // Clean up extracted files, but keep the zip cached
         std::filesystem::remove_all(extractDir);

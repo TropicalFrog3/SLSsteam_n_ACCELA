@@ -20,5 +20,6 @@ namespace LuaDownload
      */
     std::string findSteamRoot();
     bool downloadAndInstall(const std::string& appId, int providerIndex = -1,
-                            const std::vector<int>& providerOrder = {});
+                            const std::vector<int>& providerOrder = {},
+                            bool forceDownload = false);
 }
