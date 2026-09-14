@@ -19,17 +19,19 @@ JOBS := $(shell nproc)
 #DATE := $(shell date "+%Y%m%d%H%M%S")
 DATE := $(shell grep '^Version:' res/version | cut -d' ' -f2 | xargs)
 
-ifeq ($(shell echo $$TRACE),1)
+ifeq ($(TRACE),1)
 	CXXFLAGS += -D "TRACE"
 endif
 
-ifeq ($(shell echo $$DEBUG),1)
-	CXXFLAGS += -D "DEBUG"
+ifeq ($(DEBUG),1)
+	CXXFLAGS += -D "DEBUG" -g -O0
+	CXXFLAGS := $(filter-out -O3,$(CXXFLAGS))
+	CXXFLAGS := $(filter-out -flto=auto,$(CXXFLAGS))
 else
 	CXXFLAGS += -Wno-unused-parameter -Wno-unused-variable
 endif
 
-ifeq ($(shell echo $$NATIVE),1)
+ifeq ($(NATIVE),1)
 	CXXFLAGS += -march=native
 endif
 

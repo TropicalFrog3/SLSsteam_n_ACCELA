@@ -141,8 +141,17 @@ static std::string fetchGameName(const std::string& appIdStr)
     size_t pos = json.find(needle);
     if (pos == std::string::npos) return {};
     pos += needle.size();
-    size_t end = json.find('"', pos);
-    if (end == std::string::npos) return {};
+    size_t end = pos;
+    while (end < json.size()) {
+        if (json[end] == '\\' && end + 1 < json.size()) {
+            end += 2;
+        } else if (json[end] == '"') {
+            break;
+        } else {
+            end++;
+        }
+    }
+    if (end >= json.size()) return {};
 
     std::string name = json.substr(pos, end - pos);
 
@@ -178,6 +187,83 @@ static std::string fetchGameName(const std::string& appIdStr)
     return out;
 }
 
+// ── JSON string decode helper ───────────────────────────────────────────────
+static std::string decodeJsonString(const std::string& s)
+{
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i)
+    {
+        if (s[i] == '\\' && i + 1 < s.size())
+        {
+            ++i;
+            if      (s[i] == '"')  out += '"';
+            else if (s[i] == '\\') out += '\\';
+            else if (s[i] == '/')  out += '/';
+            else if (s[i] == 'b')  out += '\b';
+            else if (s[i] == 'f')  out += '\f';
+            else if (s[i] == 'n')  out += '\n';
+            else if (s[i] == 'r')  out += '\r';
+            else if (s[i] == 't')  out += '\t';
+            else if (s[i] == 'u' && i + 4 < s.size())
+            {
+                auto parseHex = [](const std::string& str, size_t pos) -> uint32_t {
+                    uint32_t val = 0;
+                    for (int j = 0; j < 4; ++j) {
+                        char c = str[pos + j];
+                        val <<= 4;
+                        if (c >= '0' && c <= '9') val |= (c - '0');
+                        else if (c >= 'a' && c <= 'f') val |= (c - 'a' + 10);
+                        else if (c >= 'A' && c <= 'F') val |= (c - 'A' + 10);
+                        else return 0xFFFFFFFF;
+                    }
+                    return val;
+                };
+
+                uint32_t cp = parseHex(s, i + 1);
+                i += 4;
+
+                if (cp >= 0xD800 && cp <= 0xDBFF && i + 6 < s.size() && s[i + 1] == '\\' && s[i + 2] == 'u')
+                {
+                    uint32_t low = parseHex(s, i + 3);
+                    if (low >= 0xDC00 && low <= 0xDFFF)
+                    {
+                        cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
+                        i += 6;
+                    }
+                }
+
+                if (cp != 0xFFFFFFFF)
+                {
+                    if (cp <= 0x7F) {
+                        out += static_cast<char>(cp);
+                    } else if (cp <= 0x7FF) {
+                        out += static_cast<char>(0xC0 | ((cp >> 6) & 0x1F));
+                        out += static_cast<char>(0x80 | (cp & 0x3F));
+                    } else if (cp <= 0xFFFF) {
+                        out += static_cast<char>(0xE0 | ((cp >> 12) & 0x0F));
+                        out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+                        out += static_cast<char>(0x80 | (cp & 0x3F));
+                    } else if (cp <= 0x10FFFF) {
+                        out += static_cast<char>(0xF0 | ((cp >> 18) & 0x07));
+                        out += static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
+                        out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+                        out += static_cast<char>(0x80 | (cp & 0x3F));
+                    }
+                }
+            }
+            else {
+                out += s[i];
+            }
+        }
+        else
+        {
+            out += s[i];
+        }
+    }
+    return out;
+}
+
 // ── Steam CMD info lookup ───────────────────────────────────────────────────
 // Fetches the 'installdir' from api.steamcmd.net if we don't have it via env.
 static std::string fetchInstallDir(const std::string& appIdStr)
@@ -195,10 +281,21 @@ static std::string fetchInstallDir(const std::string& appIdStr)
     size_t pos = json.find(needle);
     if (pos == std::string::npos) return {};
     pos += needle.size();
-    size_t end = json.find('"', pos);
-    if (end == std::string::npos) return {};
+    
+    size_t end = pos;
+    while (end < json.size()) {
+        if (json[end] == '\\' && end + 1 < json.size()) {
+            end += 2;
+        } else if (json[end] == '"') {
+            break;
+        } else {
+            end++;
+        }
+    }
+    if (end >= json.size()) return {};
 
-    std::string installdir = json.substr(pos, end - pos);
+    std::string rawDir = json.substr(pos, end - pos);
+    std::string installdir = decodeJsonString(rawDir);
     
     logMsg("fetchInstallDir: resolved '%s' for appid=%s\n",
            installdir.c_str(), appIdStr.c_str());
@@ -207,6 +304,7 @@ static std::string fetchInstallDir(const std::string& appIdStr)
 
 int main(int argc, char* argv[])
 {
+    sleep(30);
     if (argc != 2)
     {
         fprintf(stderr, "Usage: %s <appid>\n", argv[0]);
