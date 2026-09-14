@@ -77,7 +77,12 @@
         ' #sls-depot-content::-webkit-scrollbar { width: 6px; }' +
         ' #sls-depot-content::-webkit-scrollbar-track { background: transparent; }' +
         ' #sls-depot-content::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }' +
-        ' #sls-depot-content::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }';
+        ' #sls-depot-content::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }' +
+        ' /* OS badges */' +
+        ' .sls-os-badge { display: inline-block; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 4px; margin-left: 8px; vertical-align: middle; text-transform: uppercase; letter-spacing: 0.5px; }' +
+        ' .sls-os-badge.sls-os-windows { background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.25); }' +
+        ' .sls-os-badge.sls-os-linux { background: rgba(251, 191, 36, 0.15); color: #fbbf24; border: 1px solid rgba(251, 191, 36, 0.25); }' +
+        ' .sls-os-badge.sls-os-macos { background: rgba(156, 163, 175, 0.15); color: #9ca3af; border: 1px solid rgba(156, 163, 175, 0.25); }';
     overlay.appendChild(style);
     document.body.appendChild(overlay);
 
@@ -103,6 +108,32 @@
             sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'],
             i = Math.floor(Math.log(bytes) / Math.log(k));
         return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+    }
+
+    function getOsInfo(oslist) {
+        if (!oslist) return null;
+        var os = oslist.toLowerCase();
+        if (os.indexOf('windows') !== -1) return { label: 'Windows', cls: 'sls-os-windows' };
+        if (os.indexOf('linux') !== -1) return { label: 'Linux', cls: 'sls-os-linux' };
+        if (os.indexOf('macos') !== -1 || os.indexOf('osx') !== -1) return { label: 'macOS', cls: 'sls-os-macos' };
+        return null;
+    }
+
+    // Returns an HTML string for an OS badge (used during initial render)
+    function buildOsBadge(oslist) {
+        var info = getOsInfo(oslist);
+        if (!info) return '';
+        return ' <span class="sls-os-badge ' + info.cls + '">' + info.label + '</span>';
+    }
+
+    // Returns a DOM element for an OS badge (used during async updates)
+    function buildOsBadgeElement(oslist) {
+        var info = getOsInfo(oslist);
+        if (!info) return null;
+        var el = document.createElement('span');
+        el.className = 'sls-os-badge ' + info.cls;
+        el.innerText = info.label;
+        return el;
     }
 
     function closeAndCancel() {
@@ -155,17 +186,24 @@
                 if (!displayName || displayName.indexOf('Depot ') === 0) {
                     var depotIdNum = parseInt(depot.id, 10);
                     var appIdNum = parseInt(appid, 10);
-                    if (depotIdNum === appIdNum || depotIdNum === appIdNum + 1) {
+                    // Depots within appId to appId+10 without a specific name are base game content
+                    // (covers multi-OS depots like appId+1=win, +2=mac, +3=linux)
+                    if (depotIdNum >= appIdNum && depotIdNum <= appIdNum + 10) {
                         displayName = 'Base Game Content';
                     } else {
                         displayName = 'Additional Content (' + depot.id + ')';
                     }
                 }
+
+                var osBadge = '';
+                if (depot.os) {
+                    osBadge = buildOsBadge(depot.os);
+                }
                 
                 html += '<label class="sls-depot-item">' +
-                    '<input type="checkbox" class="sls-depot-checkbox" value="' + depot.id + '">' +
+                    '<input type="checkbox" class="sls-depot-checkbox" value="' + depot.id + '"' + (depot.os ? ' data-os="' + depot.os + '"' : '') + '>' +
                     '<div class="sls-depot-info">' +
-                        '<div class="sls-depot-name">' + displayName + '</div>' +
+                        '<div class="sls-depot-name">' + displayName + osBadge + '</div>' +
                         '<div class="sls-depot-meta">' +
                             '<span>ID: ' + depot.id + '</span>' +
                             '<span>' + sizeStr + '</span>' +
@@ -176,35 +214,81 @@
             
             contentDiv.innerHTML = html;
 
-            // Async fetch for DLC names and unknown sizes from SteamCMD
+            // Async fetch from SteamCMD for DLC names, unknown sizes, and missing OS info
             var depotItems = contentDiv.querySelectorAll('.sls-depot-item');
+            var needsSteamCmdFetch = false;
             for (var l = 0; l < depotItems.length; l++) {
                 var el = depotItems[l];
                 var nameEl = el.querySelector('.sls-depot-name');
-                var metaEl = el.querySelector('.sls-depot-meta');
-                var sizeSpan = metaEl.querySelectorAll('span')[1];
-                var depotId = el.querySelector('.sls-depot-checkbox').value;
-                
-                if (nameEl.innerText.indexOf('Additional Content') === 0 || sizeSpan.innerText === 'Unknown size') {
-                    (function(nEl, sSpan, did) {
-                        var isDlc = nEl.innerText.indexOf('Additional Content') === 0;
-                        var targetAppId = isDlc ? (parseInt(did, 10) - 1) : parseInt(appid, 10);
+                var sizeSpan = el.querySelector('.sls-depot-meta').querySelectorAll('span')[1];
+                var cb = el.querySelector('.sls-depot-checkbox');
+                var hasOs = cb.getAttribute('data-os');
+                if (nameEl.innerText.indexOf('Additional Content') === 0 || sizeSpan.innerText === 'Unknown size' || !hasOs) {
+                    needsSteamCmdFetch = true;
+                    break;
+                }
+            }
+
+            if (needsSteamCmdFetch) {
+                fetch('https://api.steamcmd.net/v1/info/' + appid)
+                    .then(function(r) { return r.json(); })
+                    .then(function(steamData) {
+                        if (!steamData || !steamData.data || !steamData.data[appid]) return;
+                        var appData = steamData.data[appid];
                         
-                        fetch('https://api.steamcmd.net/v1/info/' + targetAppId)
-                            .then(function(r) { return r.json(); })
-                            .then(function(dlcData) {
-                                if (dlcData && dlcData.data && dlcData.data[targetAppId]) {
-                                    var appData = dlcData.data[targetAppId];
-                                    if (isDlc && appData.common && appData.common.name) {
-                                        nEl.innerText = appData.common.name;
-                                    }
-                                    if (sSpan.innerText === 'Unknown size' && appData.depots && appData.depots[did] && appData.depots[did].manifests && appData.depots[did].manifests.public && appData.depots[did].manifests.public.size) {
-                                        sSpan.innerText = formatBytes(parseInt(appData.depots[did].manifests.public.size, 10));
+                        for (var m = 0; m < depotItems.length; m++) {
+                            var el = depotItems[m];
+                            var nameEl = el.querySelector('.sls-depot-name');
+                            var metaEl = el.querySelector('.sls-depot-meta');
+                            var sizeSpan = metaEl.querySelectorAll('span')[1];
+                            var cb = el.querySelector('.sls-depot-checkbox');
+                            var did = cb.value;
+                            var hasOs = cb.getAttribute('data-os');
+                            
+                            // Resolve DLC names
+                            if (nameEl.innerText.indexOf('Additional Content') === 0) {
+                                var depotMeta = appData.depots && appData.depots[did];
+                                if (depotMeta && depotMeta.dlcappid) {
+                                    // Fetch the DLC app name
+                                    (function(nEl, dlcId) {
+                                        fetch('https://api.steamcmd.net/v1/info/' + dlcId)
+                                            .then(function(r2) { return r2.json(); })
+                                            .then(function(dlcData) {
+                                                if (dlcData && dlcData.data && dlcData.data[dlcId] && dlcData.data[dlcId].common && dlcData.data[dlcId].common.name) {
+                                                    // Preserve any OS badge already appended
+                                                    var existingBadge = nEl.querySelector('.sls-os-badge');
+                                                    nEl.innerText = dlcData.data[dlcId].common.name;
+                                                    if (existingBadge) nEl.appendChild(existingBadge);
+                                                }
+                                            }).catch(function(){});
+                                    })(nameEl, depotMeta.dlcappid);
+                                }
+                            }
+                            
+                            // Resolve unknown sizes
+                            if (sizeSpan.innerText === 'Unknown size' && appData.depots && appData.depots[did] && appData.depots[did].manifests && appData.depots[did].manifests.public && appData.depots[did].manifests.public.size) {
+                                sizeSpan.innerText = formatBytes(parseInt(appData.depots[did].manifests.public.size, 10));
+                            }
+                            
+                            // Resolve missing OS info from SteamCMD
+                            if (!hasOs && appData.depots && appData.depots[did] && appData.depots[did].config && appData.depots[did].config.oslist) {
+                                var oslist = appData.depots[did].config.oslist;
+                                cb.setAttribute('data-os', oslist);
+                                var badge = buildOsBadgeElement(oslist);
+                                if (badge) nameEl.appendChild(badge);
+                                
+                                // If this was labeled Additional Content but it's actually a base game OS depot, fix the name
+                                if (nameEl.innerText.indexOf('Additional Content') === 0) {
+                                    var depotIdNum = parseInt(did, 10);
+                                    var appIdNum = parseInt(appid, 10);
+                                    if (depotIdNum >= appIdNum && depotIdNum <= appIdNum + 10) {
+                                        nameEl.innerText = 'Base Game Content';
+                                        nameEl.appendChild(badge);
                                     }
                                 }
-                            }).catch(function(){});
-                    })(nameEl, sizeSpan, depotId);
-                }
+                            }
+                        }
+                    }).catch(function(){});
             }
 
             // Add event listeners to checkboxes to enable/disable the download button

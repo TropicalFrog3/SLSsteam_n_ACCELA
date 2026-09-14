@@ -1005,9 +1005,19 @@ namespace StoreInject
                                                         }
                                                     }
                                                 }
+
+                                                // Look up OS info for this depot
+                                                std::string depotOs;
+                                                if (g_pClientApps) {
+                                                    char osBuf[64] = {0};
+                                                    std::string osKey = "depots/" + depotId + "/config/oslist";
+                                                    if (g_pClientApps->getAppData(appId, osKey.c_str(), osBuf, sizeof(osBuf)) > 0 && osBuf[0]) {
+                                                        depotOs = osBuf;
+                                                    }
+                                                }
                                                 
                                                 if (!first) depotsJson += ",";
-                                                depotsJson += "{\"id\":\"" + depotId + "\",\"name\":\"" + info.description + "\",\"size\":\"" + info.sizeBytes + "\"}";
+                                                depotsJson += "{\"id\":\"" + depotId + "\",\"name\":\"" + info.description + "\",\"size\":\"" + info.sizeBytes + "\",\"os\":\"" + depotOs + "\"}";
                                                 first = false;
                                             }
                                             depotsJson += "]";

@@ -260,7 +260,7 @@ bool CConfig::loadSettings(bool firstLoad)
 			}
 
 			newApps.emplace(appId);
-			LOG_DEBUG("AppId %u added to AdditionalApps\n", appId);
+			// LOG_DEBUG("AppId %u added to AdditionalApps\n", appId);
 		}
 	}
 
@@ -912,7 +912,7 @@ void scanLuaPluginsAndUpdateConfig()
 						std::string appIdStr = content.substr(pos, endPos - pos);
 						const uint32_t appId = static_cast<uint32_t>(std::stoul(appIdStr));
 						collectedAppIds.emplace(appId);
-						LOG_DEBUG("scanLuaPluginsAndUpdateConfig: Found AppID %u in %s\n", appId, path.c_str());
+						// LOG_DEBUG("scanLuaPluginsAndUpdateConfig: Found AppID %u in %s\n", appId, path.c_str());
 					}
 					catch (...)
 					{
@@ -939,7 +939,7 @@ void scanLuaPluginsAndUpdateConfig()
 			{
 				const uint32_t appId = static_cast<uint32_t>(std::stoul(appIdStr));
 				collectedAppIds.emplace(appId);
-				LOG_DEBUG("scanLuaPluginsAndUpdateConfig: Found AppID %u from manifest %s\n", appId, path.c_str());
+				// LOG_DEBUG("scanLuaPluginsAndUpdateConfig: Found AppID %u from manifest %s\n", appId, path.c_str());
 			}
 			catch (...)
 			{
@@ -958,7 +958,7 @@ void scanLuaPluginsAndUpdateConfig()
 		}
 		else
 		{
-			LOG_DEBUG("scanLuaPluginsAndUpdateConfig: AppID %u already in AdditionalApps, skipping\n", appId);
+			// LOG_DEBUG("scanLuaPluginsAndUpdateConfig: AppID %u already in AdditionalApps, skipping\n", appId);
 		}
 	}
 
