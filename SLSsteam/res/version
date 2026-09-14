@@ -1,20 +1,25 @@
-Version: beta-v1.1.5
+Version: beta-v1.1.6
 Changelog: |
-  This release adds DepotBox LUA/manifest download provider integration with API key support, fixes the post-install update loop, and ensures release archives contain the current version manifest.
+  This release expands Lua downloads with configurable provider selection,
+  HubcapDB integration, improved store-page feedback, and a modular Accela
+  post-processing pipeline.
 
   Highlights:
-  - Added DepotBox API provider for direct LUA and manifest downloads with custom timeout and API key settings.
-  - Added DepotBox API key configuration to both SLSsteam config system and store page UI dialog.
-  - Keeps the packaged version manifest synchronized with the compiled SLSsteam binary.
-  - Only an explicit pending-update marker can start the full post-update installer.
-  - Prevented the normal update-all.sh resource from being mistaken for a pending update.
-  - Prevented malformed config.yaml boolean values from aborting Steam during startup.
-  - Added loader safety checks for unnamed link maps during early Steam startup.
-  - Fixed fresh-device Steam wrapper creation and native launcher detection.
-  - Ensured the bundled, tested SLSsteam payload is installed after Headcrab.
-  - Preserved the full update flow for SLSsteam, ACCELA, and Headcrab.
-  - Corrected LUA appid handling so game IDs resolve more reliably.
-  - Fixed ACCELA AppID resolution logic.
-  - Improved the update flow so Steam can restart safely while binaries are replaced.
+  - Added a browser injection script that displays the compiled SLSsteam version
+    in Steam's top navigation bar through the RemoveLua injection flow.
+  - Added Lua download provider selection and configurable provider ordering.
+  - Added HubcapDB as a Lua download provider with API-key configuration and
+    download session tracking.
+  - Added HubcapKey support to the configuration and store-page injection flow.
+  - Added skeleton loading states, asynchronous injection, improved loading
+    bars, and provider-specific download tracking to the store page.
+  - Prevented duplicate API authentication keys from being stored during
+    updateApiAuth.
+  - Added YAML escaping for API authentication keys before configuration writes.
+  - Added modular Accela manifest parsing and validation.
+  - Added Steam installation path detection and directory management for Accela.
+  - Added Accela post-processing for ACF writing and manifest management.
+  - Added ZIP validation, assembly, and extraction modules for Accela downloads.
+  - Separated Accela workflow concerns into dedicated, maintainable C++ modules.
 
 DownloadUrl: https://github.com/TropicalFrog3/SLSsteam_n_ACCELA/releases/download/${version}/SLSsteam-n-ACCELA.zip

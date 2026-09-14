@@ -3,4 +3,4 @@
 #include <cstdint>
 
 
-constexpr const char* VERSION = "beta-v1.1.5";
+constexpr const char* VERSION = "beta-v1.1.6";
