@@ -45,6 +45,11 @@ namespace LuaDownload
             200, 404, 900
         },
         {
+            "HubcapDB",
+            "https://hubcapmanifest.com/api/v1/manifest/<appid>",
+            200, 404, 60
+        },
+        {
             "Morrenus",
             "https://hubcapmanifest.com/api/v1/manifest/<appid>",
             200, 404, 60
@@ -102,8 +107,7 @@ namespace LuaDownload
             std::string js = "(function(){";
             js += "var btns=document.querySelectorAll('.sls-lua-btn');";
             js += "btns.forEach(function(btn){";
-            js += "var s=btn.querySelector('a span');";
-            js += "if(s) s.innerText='" + safeText + "';";
+            js += "btn.dataset.slsStatus='" + safeText + "';";
             if (!color.empty())
             {
                 js += "var a=btn.querySelector('a');";
@@ -353,7 +357,18 @@ namespace LuaDownload
 
                 std::string authHeader;
 
-                if (std::string(api.name) == "Morrenus")
+                if (std::string(api.name) == "HubcapDB")
+                {
+                    if (!g_config.hubcapKey.get().empty())
+                    {
+                        authHeader = "Authorization: Bearer " + g_config.hubcapKey.get();
+                    }
+                    else if (!g_config.morrenusKey.get().empty())
+                    {
+                        authHeader = "Authorization: Bearer " + g_config.morrenusKey.get();
+                    }
+                }
+                else if (std::string(api.name) == "Morrenus")
                 {
                     authHeader = "Authorization: Bearer " + g_config.morrenusKey.get();
                 }
@@ -402,10 +417,24 @@ namespace LuaDownload
                     continue;
                 }
 
-                // Validate zip
+                // If downloaded file is a raw Lua file (e.g. from HubcapDB /api/v1/lua/<appid>), handle it directly
                 if (!isValidZip(zipPath))
                 {
-                    LOG_INFO("LuaDownload: API '%s' returned non-zip file\n", api.name);
+                    // Check if it's a valid Lua file with manifests
+                    auto luaData = CppAccela::LuaParser::parseFile(zipPath);
+                    if (luaData.valid && !luaData.manifests.empty())
+                    {
+                        LOG_INFO("LuaDownload: API '%s' returned a raw Lua script for appid=%s\n", api.name, appId.c_str());
+                        std::filesystem::create_directories(extractDir);
+                        std::string targetLuaPath = extractDir + "/" + appId + ".lua";
+                        std::filesystem::rename(zipPath, targetLuaPath);
+
+                        downloaded = true;
+                        successApi = api.name;
+                        break;
+                    }
+
+                    LOG_INFO("LuaDownload: API '%s' returned non-zip / invalid Lua file\n", api.name);
                     std::filesystem::remove(zipPath);
                     continue;
                 }
@@ -424,20 +453,22 @@ namespace LuaDownload
             return false;
         }
 
-        // Extract zip
-        // Clean up any previous extraction
-        if (std::filesystem::exists(extractDir))
+        // Extract zip if zip file exists
+        if (std::filesystem::exists(zipPath))
         {
-            std::filesystem::remove_all(extractDir);
-        }
+            if (std::filesystem::exists(extractDir))
+            {
+                std::filesystem::remove_all(extractDir);
+            }
 
-        pushStatus(appId, "Extracting...");
-        if (!extractZip(zipPath, extractDir))
-        {
-            LOG_INFO("LuaDownload: Failed to extract zip for appid=%s\n", appId.c_str());
-            pushStatus(appId, "Extract failed", "hue-rotate(0deg) brightness(1.0)");
-            std::filesystem::remove(zipPath);
-            return false;
+            pushStatus(appId, "Extracting...");
+            if (!extractZip(zipPath, extractDir))
+            {
+                LOG_INFO("LuaDownload: Failed to extract zip for appid=%s\n", appId.c_str());
+                pushStatus(appId, "Extract failed", "hue-rotate(0deg) brightness(1.0)");
+                std::filesystem::remove(zipPath);
+                return false;
+            }
         }
 
         // Find the relevant files

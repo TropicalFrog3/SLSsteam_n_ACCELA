@@ -16,6 +16,7 @@
     var luaProviders = [
         { name: 'Ryuu', key: 'sls-ryuu-key' },
         { name: 'DepotBox', key: 'sls-dpbx-key' },
+        { name: 'HubcapDB', key: 'sls-hubcap-key' },
         { name: 'Morrenus', key: 'sls-morr-key' },
         { name: 'Sushi', key: 'sls-sushi-key' },
         { name: 'Spinoza', key: 'sls-spinoza-key' },
@@ -49,7 +50,8 @@
         var morr = localStorage.getItem('sls-morr-key') || '%MORR_KEY%';
         var ryuu = localStorage.getItem('sls-ryuu-key') || '%RYUU_KEY%';
         var dpbx = localStorage.getItem('sls-dpbx-key') || '%DPBX_KEY%';
-        window.location.hash = 'sls-auth-MORR=' + encodeURIComponent(morr) + '&RYUU=' + encodeURIComponent(ryuu) + '&DPBX=' + encodeURIComponent(dpbx) + '-TS=' + Date.now();
+        var hubcap = localStorage.getItem('sls-hubcap-key') || '%HUBCAP_KEY%';
+        window.location.hash = 'sls-auth-MORR=' + encodeURIComponent(morr) + '&RYUU=' + encodeURIComponent(ryuu) + '&DPBX=' + encodeURIComponent(dpbx) + '&HUBCAP=' + encodeURIComponent(hubcap) + '-TS=' + Date.now();
     }
 
     function sendLuaRequest(appid, providerIndex, customOrder) {
@@ -83,20 +85,34 @@
         var s = document.createElement('style');
         s.id = 'sls-bar-style';
         s.textContent = [
+            '@keyframes slsShimmer {',
+            '  0% { background-position: -200% 0; }',
+            '  100% { background-position: 200% 0; }',
+            '}',
             '.sls-bar-host { position:relative; overflow:hidden; }',
             '.sls-bar-fill {',
             '  position:absolute; top:0; left:0; height:100%;',
             '  width:0%; border-radius:inherit;',
-            '  background:linear-gradient(90deg,#22c55e 0%,#4ade80 100%);',
-            '  transition:width 0.55s cubic-bezier(0.4,0,0.2,1),',
-            '             background 0.3s ease;',
+            '  background: linear-gradient(90deg, rgba(16, 185, 129, 0.15) 0%, rgba(52, 211, 153, 0.35) 50%, rgba(16, 185, 129, 0.15) 100%),',
+            '              linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.2) 50%, rgba(255,255,255,0) 100%);',
+            '  background-size: 100% 100%, 200% 100%;',
+            '  animation: slsShimmer 2.5s infinite linear;',
+            '  box-shadow: inset 0 0 12px rgba(52, 211, 153, 0.3), 0 0 8px rgba(16, 185, 129, 0.4);',
+            '  border-right: 2px solid rgba(52, 211, 153, 0.8);',
+            '  transition: width 0.55s cubic-bezier(0.4,0,0.2,1), background 0.4s ease, box-shadow 0.4s ease, border-color 0.4s ease;',
             '  pointer-events:none; z-index:0;',
             '}',
             '.sls-bar-fill.sls-bar-fail {',
-            '  background:linear-gradient(90deg,#ef4444 0%,#f87171 100%);',
+            '  background: linear-gradient(90deg, rgba(225, 29, 72, 0.2) 0%, rgba(244, 63, 94, 0.4) 50%, rgba(225, 29, 72, 0.2) 100%),',
+            '              linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.15) 50%, rgba(255,255,255,0) 100%);',
+            '  background-size: 100% 100%, 200% 100%;',
+            '  box-shadow: inset 0 0 12px rgba(244, 63, 94, 0.35), 0 0 10px rgba(225, 29, 72, 0.5);',
+            '  border-right: 2px solid rgba(244, 63, 94, 0.9);',
             '}',
             '.sls-bar-fill.sls-bar-done {',
-            '  background:linear-gradient(90deg,#16a34a 0%,#4ade80 100%);',
+            '  background: linear-gradient(90deg, rgba(16, 185, 129, 0.35) 0%, rgba(52, 211, 153, 0.55) 100%);',
+            '  box-shadow: inset 0 0 16px rgba(52, 211, 153, 0.5), 0 0 12px rgba(16, 185, 129, 0.6);',
+            '  border-right: 2px solid rgba(52, 211, 153, 1);',
             '}',
             '.sls-bar-host > a { position:relative; z-index:1; }',
         ].join('\n');
@@ -205,20 +221,253 @@
         }, 150);
     }
 
+    var globalDownloadSessions = {};
+
+    function saveSessionToStorage(appid) {
+        var session = globalDownloadSessions[appid];
+        if (!session) return;
+        try {
+            var dataToSave = {
+                requestedProviders: session.requestedProviders,
+                providerStates: session.providerStates,
+                allowedIndices: session.allowedIndices,
+                currentActiveIdx: session.currentActiveIdx,
+                targetPct: session.targetPct,
+                finished: session.finished
+            };
+            localStorage.setItem('sls-session-' + appid, JSON.stringify(dataToSave));
+        } catch(e) {}
+    }
+
+    function loadSessionFromStorage(appid) {
+        try {
+            var raw = localStorage.getItem('sls-session-' + appid);
+            if (!raw) return null;
+            var data = JSON.parse(raw);
+            return data;
+        } catch(e) {
+            return null;
+        }
+    }
+
+    function getOrCreateGlobalSession(appid) {
+        if (!globalDownloadSessions[appid]) {
+            var saved = loadSessionFromStorage(appid);
+            if (saved) {
+                globalDownloadSessions[appid] = {
+                    requestedProviders: saved.requestedProviders || {},
+                    providerStates: saved.providerStates || {},
+                    allowedIndices: saved.allowedIndices || [],
+                    currentActiveIdx: typeof saved.currentActiveIdx === 'number' ? saved.currentActiveIdx : -1,
+                    targetPct: saved.targetPct || 0,
+                    finished: !!saved.finished,
+                    lastText: '',
+                    pollId: null,
+                    crawlId: null
+                };
+            } else {
+                globalDownloadSessions[appid] = {
+                    requestedProviders: {},
+                    providerStates: {},
+                    allowedIndices: [],
+                    currentActiveIdx: -1,
+                    targetPct: 0,
+                    finished: false,
+                    lastText: '',
+                    pollId: null,
+                    crawlId: null
+                };
+            }
+        }
+        return globalDownloadSessions[appid];
+    }
+
+    function syncModalUI(appid) {
+        var overlay = document.getElementById('sls-overlay-modal');
+        if (!overlay || overlay.dataset.slsAppid !== String(appid)) return;
+        var session = globalDownloadSessions[appid];
+        if (!session) return;
+
+        Object.keys(session.requestedProviders).forEach(function(pIdxStr) {
+            var pIdx = parseInt(pIdxStr, 10);
+            var btn = overlay.querySelector('[data-sls-provider-download="' + pIdx + '"]');
+            if (btn) {
+                btn.disabled = true;
+                btn.style.opacity = '0.4';
+                btn.style.cursor = 'not-allowed';
+            }
+        });
+
+        Object.keys(session.providerStates).forEach(function(pIdxStr) {
+            var pIdx = parseInt(pIdxStr, 10);
+            var state = session.providerStates[pIdxStr];
+            var rowEl = overlay.querySelector('[data-sls-provider="' + pIdx + '"]');
+            if (!rowEl) return;
+            var bar = rowEl.querySelector('.sls-bar-fill');
+            if (!bar) {
+                injectLoadingBarStyles();
+                bar = document.createElement('div');
+                bar.className = 'sls-bar-fill';
+                rowEl.insertBefore(bar, rowEl.firstChild);
+            }
+            bar.style.width = state.pct + '%';
+            if (state.status === 'done') {
+                bar.classList.remove('sls-bar-fail');
+                bar.classList.add('sls-bar-done');
+            } else if (state.status === 'fail') {
+                bar.classList.remove('sls-bar-done');
+                bar.classList.add('sls-bar-fail');
+            } else {
+                bar.classList.remove('sls-bar-done', 'sls-bar-fail');
+            }
+        });
+    }
+
+    function findProviderIndexFromText(text) {
+        if (!text) return -1;
+        var lower = text.toLowerCase();
+        for (var i = 0; i < luaProviders.length; i++) {
+            var keyName = luaProviders[i].name.split(' ')[0].toLowerCase();
+            if (lower.indexOf(keyName) !== -1) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    function startGlobalDownloadTracking(appid, newAllowedIndices) {
+        injectLoadingBarStyles();
+        var session = getOrCreateGlobalSession(appid);
+        session.allowedIndices = newAllowedIndices || session.allowedIndices;
+
+        if (newAllowedIndices) {
+            newAllowedIndices.forEach(function(pIdx) {
+                session.requestedProviders[pIdx] = true;
+            });
+        }
+
+        if (session.currentActiveIdx === -1 || session.finished) {
+            if (session.allowedIndices && session.allowedIndices.length > 0) {
+                session.currentActiveIdx = session.allowedIndices[0];
+            }
+            session.targetPct = 5;
+            session.finished = false;
+            if (session.currentActiveIdx !== -1) {
+                session.providerStates[session.currentActiveIdx] = { status: 'active', pct: 5 };
+            }
+        }
+
+        saveSessionToStorage(appid);
+        syncModalUI(appid);
+
+        if (session.crawlId) clearInterval(session.crawlId);
+        session.crawlId = setInterval(function() {
+            if (session.finished || session.currentActiveIdx === -1) return;
+            var st = session.providerStates[session.currentActiveIdx];
+            if (!st) return;
+            if (st.pct < session.targetPct) {
+                var step = Math.max(0.05, (session.targetPct - st.pct) * 0.04);
+                st.pct = Math.min(session.targetPct, st.pct + step);
+                saveSessionToStorage(appid);
+                syncModalUI(appid);
+            }
+        }, 80);
+
+        if (session.pollId) clearInterval(session.pollId);
+        session.pollId = setInterval(function() {
+            var pageBtn = document.querySelector('.sls-lua-btn[data-sls-appid="' + appid + '"]');
+            var text = pageBtn ? (pageBtn.dataset.slsStatus || (pageBtn.querySelector('a span') ? pageBtn.querySelector('a span').innerText : '')) : '';
+            if (text === session.lastText) return;
+            session.lastText = text;
+
+            if (SLS_FAIL_TEXTS.test(text)) {
+                finishGlobalTracking(appid, false);
+                return;
+            }
+            if (/installed!?/i.test(text)) {
+                finishGlobalTracking(appid, true);
+                return;
+            }
+
+            var allowed = session.allowedIndices || [];
+            var foundIdx = findProviderIndexFromText(text);
+            if (foundIdx !== -1 && allowed.indexOf(foundIdx) !== -1) {
+                if (session.currentActiveIdx !== -1 && session.currentActiveIdx !== foundIdx) {
+                    session.providerStates[session.currentActiveIdx] = { status: 'fail', pct: 100 };
+                    session.targetPct = 5;
+                }
+                session.currentActiveIdx = foundIdx;
+                session.targetPct = Math.max(session.targetPct, 35);
+                if (!session.providerStates[foundIdx]) {
+                    session.providerStates[foundIdx] = { status: 'active', pct: 5 };
+                } else if (session.providerStates[foundIdx].pct < 5) {
+                    session.providerStates[foundIdx].pct = 5;
+                }
+                session.providerStates[foundIdx].status = 'active';
+            }
+
+            for (var i = 0; i < SLS_PHASE_MAP.length; i++) {
+                if (SLS_PHASE_MAP[i].match.test(text)) {
+                    if (SLS_PHASE_MAP[i].pct > session.targetPct) {
+                        session.targetPct = SLS_PHASE_MAP[i].pct;
+                    }
+                    break;
+                }
+            }
+            saveSessionToStorage(appid);
+            syncModalUI(appid);
+        }, 150);
+    }
+
+    function finishGlobalTracking(appid, success) {
+        var session = globalDownloadSessions[appid];
+        if (!session || session.finished) return;
+        session.finished = true;
+        if (session.crawlId) clearInterval(session.crawlId);
+        if (session.pollId) clearInterval(session.pollId);
+
+        var allowed = session.allowedIndices || [];
+        if (success) {
+            if (session.currentActiveIdx !== -1) {
+                session.providerStates[session.currentActiveIdx] = {
+                    status: 'done',
+                    pct: 100
+                };
+            }
+        } else {
+            allowed.forEach(function(pIdx) {
+                session.providerStates[pIdx] = {
+                    status: 'fail',
+                    pct: 100
+                };
+            });
+            if (session.currentActiveIdx !== -1) {
+                session.providerStates[session.currentActiveIdx] = {
+                    status: 'fail',
+                    pct: 100
+                };
+            }
+        }
+        saveSessionToStorage(appid);
+        syncModalUI(appid);
+    }
+
     function openLuaProviderConfig(appid) {
         if (document.getElementById('sls-overlay-modal')) return;
         var overlay = document.createElement('div');
         overlay.id = 'sls-overlay-modal';
+        overlay.dataset.slsAppid = String(appid);
         overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(10,12,18,0.85);z-index:999999;display:flex;justify-content:center;align-items:center;backdrop-filter:blur(8px);';
         var order = getProviderOrder();
-        var requestedProviders = {};
+        var session = getOrCreateGlobalSession(appid);
+        var requestedProviders = session.requestedProviders;
 
         var rows = '';
         order.forEach(function(providerIndex, position) {
             var provider = luaProviders[providerIndex];
             var apiKey = localStorage.getItem(provider.key) || '';
-            rows += '<div data-sls-provider="' + providerIndex + '" style="position:relative;overflow:hidden;display:flex;align-items:center;gap:8px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.08);">' +
-                '<strong style="position:relative;z-index:1;flex:1;color:#f5f6f8;font-size:13px;">' + provider.name + '</strong>' +
+            rows += '<div data-sls-provider="' + providerIndex + '" style="position:relative;overflow:hidden;display:flex;align-items:center;gap:8px;padding:10px 12px;margin-bottom:6px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:8px;">' +
+                '<strong style="padding-left:10px;position:relative;z-index:1;flex:1;color:#f5f6f8;font-size:13px;">' + provider.name + '</strong>' +
                 '<div style="position:relative;z-index:1;display:flex;align-items:center;gap:6px;min-width:190px;border:1px solid #3b4252;border-radius:5px;padding:3px 6px;">' +
                 '<span title="API key" aria-hidden="true" style="color:#a5b4fc;font-size:15px;">&#128273;</span>' +
                 '<input data-sls-api-key="' + providerIndex + '" aria-label="API key for ' + escapeHtml(provider.name) + '" value="' + escapeHtml(apiKey) + '" placeholder="API key" type="text" style="min-width:0;flex:1;background:transparent;border:0;outline:0;color:#f5f6f8;padding:5px 2px;font-size:12px;" />' +
@@ -234,6 +483,7 @@
             '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px;"><button id="sls-auto-search" style="min-width:100%;background:#4f46e5;border:0;color:#fff;padding:9px 14px;border-radius:6px;cursor:pointer;font-weight:600;">Auto Download</button></div>' +
             '</div>';
         document.body.appendChild(overlay);
+        syncModalUI(appid);
 
         function close() { overlay.remove(); }
         document.getElementById('sls-provider-close').onclick = close;
@@ -249,121 +499,6 @@
             }
         }
 
-        function findProviderIndexFromText(text) {
-            if (!text) return -1;
-            var lower = text.toLowerCase();
-            for (var i = 0; i < luaProviders.length; i++) {
-                var keyName = luaProviders[i].name.split(' ')[0].toLowerCase();
-                if (lower.indexOf(keyName) !== -1) {
-                    return i;
-                }
-            }
-            return -1;
-        }
-
-        // ── startModalDownloadTracking ───────────────────────────────────────
-        // Tracks single or auto download progress sequentially. As C++ reports
-        // "Trying <Provider>", only the provider being tried fills green.
-        // If it fails and moves to the next provider, the failed provider turns RED
-        // and the next provider starts filling GREEN.
-        function startModalDownloadTracking(allowedIndices) {
-            if (!allowedIndices || allowedIndices.length === 0) return;
-            injectLoadingBarStyles();
-
-            var currentActiveIdx = allowedIndices[0];
-            var targetPct = 5;
-            var finished = false;
-            var lastText = '';
-
-            function getOrCreateBar(pIdx) {
-                var rowEl = overlay.querySelector('[data-sls-provider="' + pIdx + '"]');
-                if (!rowEl) return null;
-                var bar = rowEl.querySelector('.sls-bar-fill');
-                if (!bar) {
-                    bar = document.createElement('div');
-                    bar.className = 'sls-bar-fill';
-                    rowEl.insertBefore(bar, rowEl.firstChild);
-                }
-                return bar;
-            }
-
-            var initialBar = getOrCreateBar(currentActiveIdx);
-            if (initialBar) initialBar.style.width = '5%';
-
-            // Crawl active bar smoothly up to targetPct
-            var crawlId = setInterval(function() {
-                if (finished || currentActiveIdx === -1) return;
-                var bar = getOrCreateBar(currentActiveIdx);
-                if (!bar) return;
-                var cur = parseFloat(bar.style.width) || 0;
-                if (cur < targetPct) {
-                    var step = Math.max(0.05, (targetPct - cur) * 0.04);
-                    bar.style.width = Math.min(targetPct, cur + step) + '%';
-                }
-            }, 80);
-
-            function finishTracking(success) {
-                if (finished) return;
-                finished = true;
-                clearInterval(crawlId);
-                clearInterval(pollId);
-
-                if (currentActiveIdx !== -1) {
-                    var bar = getOrCreateBar(currentActiveIdx);
-                    if (bar) {
-                        bar.style.width = '100%';
-                        bar.classList.add(success ? 'sls-bar-done' : 'sls-bar-fail');
-                    }
-                }
-            }
-
-            var pollId = setInterval(function() {
-                var pageBtn = document.querySelector('.sls-lua-btn[data-sls-appid="' + appid + '"]');
-                var span    = pageBtn ? pageBtn.querySelector('a span') : null;
-                var text    = span ? span.innerText : '';
-                if (text === lastText) return;
-                lastText = text;
-
-                if (SLS_FAIL_TEXTS.test(text)) {
-                    finishTracking(false);
-                    return;
-                }
-                if (/installed!?/i.test(text)) {
-                    finishTracking(true);
-                    return;
-                }
-
-                // Match status text to a specific provider (e.g. "Trying DepotBox...")
-                var foundIdx = findProviderIndexFromText(text);
-                if (foundIdx !== -1 && allowedIndices.indexOf(foundIdx) !== -1) {
-                    if (currentActiveIdx !== -1 && currentActiveIdx !== foundIdx) {
-                        // Previous provider failed! Snap its bar to 100% red
-                        var prevBar = getOrCreateBar(currentActiveIdx);
-                        if (prevBar) {
-                            prevBar.style.width = '100%';
-                            prevBar.classList.add('sls-bar-fail');
-                        }
-                        targetPct = 5;
-                    }
-                    currentActiveIdx = foundIdx;
-                    targetPct = Math.max(targetPct, 35);
-                    var newBar = getOrCreateBar(currentActiveIdx);
-                    if (newBar && parseFloat(newBar.style.width || 0) < 5) {
-                        newBar.style.width = '5%';
-                    }
-                }
-
-                for (var i = 0; i < SLS_PHASE_MAP.length; i++) {
-                    if (SLS_PHASE_MAP[i].match.test(text)) {
-                        if (SLS_PHASE_MAP[i].pct > targetPct) {
-                            targetPct = SLS_PHASE_MAP[i].pct;
-                        }
-                        break;
-                    }
-                }
-            }, 150);
-        }
-
         // Auto Download — try only unrequested providers sequentially
         document.getElementById('sls-auto-search').onclick = function() {
             var fullOrder = getProviderOrder();
@@ -373,12 +508,7 @@
 
             if (remainingOrder.length === 0) return;
 
-            remainingOrder.forEach(function(pIdx) {
-                requestedProviders[pIdx] = true;
-                disableProviderBtn(pIdx);
-            });
-
-            startModalDownloadTracking(remainingOrder);
+            startGlobalDownloadTracking(appid, remainingOrder);
             sendLuaRequest(appid, null, remainingOrder);
         };
 
@@ -433,10 +563,7 @@
                 var pIdx = parseInt(button.getAttribute('data-sls-provider-download'), 10);
                 if (requestedProviders[pIdx]) return;
 
-                requestedProviders[pIdx] = true;
-                disableProviderBtn(pIdx);
-
-                startModalDownloadTracking([pIdx]);
+                startGlobalDownloadTracking(appid, [pIdx]);
                 sendLuaRequest(appid, pIdx);
             };
         });
@@ -522,11 +649,11 @@
         if (document.getElementById('sls-overlay-modal')) return;
         var overlay = document.createElement('div');
         overlay.id = 'sls-overlay-modal';
-        overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(10,12,18,0.85);z-index:999999;display:flex;justify-content:center;align-items:center;backdrop-filter:blur(8px);transition:all 0.3s ease;opacity:0;';
-
+        overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(10,12,18,0.85);z-index:999999;display:flex;justify-content:center;align-items:center;backdrop-filter:blur(8px);';
         var currentMorr = localStorage.getItem('sls-morr-key') || '%MORR_KEY%';
         var currentRyuu = localStorage.getItem('sls-ryuu-key') || '%RYUU_KEY%';
         var currentDpbx = localStorage.getItem('sls-dpbx-key') || '%DPBX_KEY%';
+        var currentHubcap = localStorage.getItem('sls-hubcap-key') || '%HUBCAP_KEY%';
 
         var cardHtml = '<div style="background: linear-gradient(145deg, #161920 0%, #0d0f14 100%); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 16px; padding: 28px; width: 440px; box-shadow: 0 20px 50px rgba(0,0,0,0.6); font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, Helvetica, Arial, sans-serif; color: #f5f6f8; transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1); transform: scale(0.95); opacity: 0;" id="sls-modal-card">' +
             '<!-- Title bar -->' +
@@ -540,6 +667,13 @@
             '<!-- API Settings Section -->' +
             '<div>' +
                 '<h3 style="margin:0 0 14px; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:1px; color:#4f46e5;">API Credentials</h3>' +
+                '<div style="margin-bottom:16px;">' +
+                    '<div style="display:flex; justify-content:space-between; margin-bottom:6px; font-size:12px; font-weight:600; color:#9ca3af;">' +
+                        '<span>HubcapDB API Key</span>' +
+                        '<a href="https://hubcapmanifest.com/" target="_blank" style="color:#6366f1; text-decoration:none; transition: color 0.2s;">Get Key</a>' +
+                    '</div>' +
+                    '<input id="sls-hubcap" type="text" value="' + currentHubcap + '" style="width:100%; box-sizing:border-box; background:#090a0f; border:1px solid rgba(255,255,255,0.08); color:#f5f6f8; padding:10px 14px; border-radius:8px; font-family:monospace; font-size:13px; outline:none; transition: all 0.2s;" placeholder="Optional..."/>' +
+                '</div>' +
                 '<div style="margin-bottom:16px;">' +
                     '<div style="display:flex; justify-content:space-between; margin-bottom:6px; font-size:12px; font-weight:600; color:#9ca3af;">' +
                         '<span>Morrenus API Key</span>' +
@@ -574,7 +708,7 @@
         style.textContent = ' #sls-close-x:hover { background: rgba(255,255,255,0.1) !important; color: #fff !important; }' +
             ' #sls-btn-cancel:hover { background: rgba(255,255,255,0.03) !important; color: #fff !important; border-color: rgba(255,255,255,0.2) !important; }' +
             ' #sls-btn-save:hover { box-shadow: 0 6px 20px rgba(79,70,229,0.45) !important; }' +
-            ' #sls-morr:focus, #sls-ryuu:focus, #sls-dpbx:focus { border-color: #6366f1 !important; box-shadow: 0 0 0 2px rgba(99,102,241,0.2) !important; }';
+            ' #sls-hubcap:focus, #sls-morr:focus, #sls-ryuu:focus, #sls-dpbx:focus { border-color: #6366f1 !important; box-shadow: 0 0 0 2px rgba(99,102,241,0.2) !important; }';
 
         overlay.appendChild(style);
         document.body.appendChild(overlay);
@@ -605,13 +739,15 @@
         cancelBtn.onclick = close;
 
         saveBtn.onclick = function() {
+            var hubcap = document.getElementById('sls-hubcap').value;
             var morr = document.getElementById('sls-morr').value;
             var ryuu = document.getElementById('sls-ryuu').value;
             var dpbx = document.getElementById('sls-dpbx').value;
+            localStorage.setItem('sls-hubcap-key', hubcap);
             localStorage.setItem('sls-morr-key', morr);
             localStorage.setItem('sls-ryuu-key', ryuu);
             localStorage.setItem('sls-dpbx-key', dpbx);
-            window.location.hash = 'sls-auth-MORR=' + encodeURIComponent(morr) + '&RYUU=' + encodeURIComponent(ryuu) + '&DPBX=' + encodeURIComponent(dpbx) + '-TS=' + Date.now();
+            window.location.hash = 'sls-auth-MORR=' + encodeURIComponent(morr) + '&RYUU=' + encodeURIComponent(ryuu) + '&DPBX=' + encodeURIComponent(dpbx) + '&HUBCAP=' + encodeURIComponent(hubcap) + '-TS=' + Date.now();
             close();
 
             var toast = document.createElement('div');
@@ -625,14 +761,19 @@
 
     function addButtons() {
         if (observer) observer.disconnect();
+        if (document.querySelector('.sls-lua-btn')) {
+            if (observer && document.body) observer.observe(document.body, { childList: true, subtree: true });
+            return;
+        }
         var cartBtns = document.querySelectorAll('.btn_addtocart, .btn_add_to_cart');
-        cartBtns.forEach(function(cartBtn) {
-            if (cartBtn.dataset.slsProcessed) return;
-            if (cartBtn.classList.contains('sls-lua-btn')) return;
+        for (var i = 0; i < cartBtns.length; i++) {
+            var cartBtn = cartBtns[i];
+            if (cartBtn.dataset.slsProcessed) continue;
+            if (cartBtn.classList.contains('sls-lua-btn')) continue;
             var link = cartBtn.querySelector('a');
-            if (!link) return;
+            if (!link) continue;
             var hrefLower = link.href.toLowerCase();
-            if (hrefLower.indexOf('bundle') !== -1 || hrefLower.indexOf('dlc') !== -1) return;
+            if (hrefLower.indexOf('bundle') !== -1 || hrefLower.indexOf('dlc') !== -1) continue;
             var productID = null;
             var match = window.location.href.match(/\/(app|sub)\/([0-9]+)/);
             if (match) {
@@ -670,45 +811,24 @@
                         }
                     } else {
                         // Query the server
-                        (function(ll, lb, pid) {
+                        (function(ll, lb, pid, cb) {
                             fetch('http://127.0.0.1:9001/check?id=' + pid)
                                 .then(function(r) { return r.json(); })
                                 .then(function(data) {
                                     appUnlockStatus[pid] = data;
                                     var isUnlocked = data.exists || data.pending;
                                     if (isUnlocked) {
-                                        setupRemoveButton(ll, lb, pid, cartBtn);
+                                        setupRemoveButton(ll, lb, pid, cb);
                                     } else {
-                                        setupDownloadButton(ll, lb, pid, cartBtn);
+                                        setupDownloadButton(ll, lb, pid, cb);
                                     }
                                 })
                                 .catch(function() {
                                     ping('Check failed for ' + pid + ', defaulting to Download');
-                                    setupDownloadButton(ll, lb, pid, cartBtn);
+                                    setupDownloadButton(ll, lb, pid, cb);
                                 });
-                        })(luaLink, luaBtn, productID);
+                        })(luaLink, luaBtn, productID, cartBtn);
                     }
-                }
-                // Settings button
-                var setBtn = cartBtn.cloneNode(true);
-                setBtn.classList.remove('btn_addtocart', 'btn_add_to_cart');
-                setBtn.classList.add('sls-settings-btn');
-                setBtn.dataset.slsProcessed = '1';
-                setBtn.style.display = 'inline-block';
-                setBtn.style.marginRight = '4px';
-                setBtn.style.float = 'right';
-                var setLink = setBtn.querySelector('a');
-                if (setLink) {
-                    setLink.href = 'javascript:void(0)';
-                    setLink.removeAttribute('id');
-                    var spanSet = setLink.querySelector('span');
-                    if (spanSet) spanSet.innerText = 'Config';
-                    setLink.style.filter = 'hue-rotate(200deg) brightness(1.1)';
-                    setLink.onclick = function(e) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        openLuaProviderConfig(productID);
-                    };
                 }
                 var header = document.querySelector('div.apphub_HeaderStandardTop') ||
                     document.querySelector('.apphub_HeaderStandardTop');
@@ -722,13 +842,23 @@
                     }
                     var insertionPoint = appName || header.firstChild;
                     header.insertBefore(luaBtn, insertionPoint);
-                    // header.insertBefore(setBtn, luaBtn);
                 } else {
                     cartBtn.parentNode.insertBefore(luaBtn, cartBtn.nextSibling);
-                    // luaBtn.parentNode.insertBefore(setBtn, luaBtn.nextSibling);
                 }
+                break;
             }
-        });
+        }
+
+        // Auto-resume download tracking if there is an active session for this product
+        var pageMatch = window.location.href.match(/\/(app|sub)\/([0-9]+)/);
+        if (pageMatch && pageMatch[2]) {
+            var currentAppid = pageMatch[2];
+            var saved = loadSessionFromStorage(currentAppid);
+            if (saved && !saved.finished) {
+                startGlobalDownloadTracking(currentAppid, null);
+            }
+        }
+
         if (observer && document.body) observer.observe(document.body, { childList: true, subtree: true });
     }
 

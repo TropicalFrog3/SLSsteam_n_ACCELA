@@ -150,4 +150,5 @@ DumpClientInterfaces: no
 ExtendedLogging: no
 MorrenusKey: ""
 RyuuKey: ""
-DepotBoxKey: "")";
+DepotBoxKey: ""
+HubcapKey: "")";

@@ -734,23 +734,40 @@ namespace StoreInject
                         if (mEnd != std::string::npos)
                         {
                             size_t rStart = mEnd + 6;
-                            // Check for optional &DPBX= before -TS=
                             size_t dpbxPos = response.find("&DPBX=", rStart);
+                            size_t hubcapPos = response.find("&HUBCAP=", rStart);
                             size_t cEnd = response.find("-TS=", rStart);
                             if (cEnd != std::string::npos)
                             {
                                 std::string morr = urlDecode(response.substr(mStart, mEnd - mStart));
                                 std::string ryuu;
                                 std::string dpbx;
+                                std::string hubcap;
 
                                 if (dpbxPos != std::string::npos && dpbxPos < cEnd)
                                 {
                                     ryuu = urlDecode(response.substr(rStart, dpbxPos - rStart));
-                                    dpbx = urlDecode(response.substr(dpbxPos + 6, cEnd - (dpbxPos + 6)));
+                                    if (hubcapPos != std::string::npos && hubcapPos < cEnd)
+                                    {
+                                        dpbx = urlDecode(response.substr(dpbxPos + 6, hubcapPos - (dpbxPos + 6)));
+                                        hubcap = urlDecode(response.substr(hubcapPos + 8, cEnd - (hubcapPos + 8)));
+                                    }
+                                    else
+                                    {
+                                        dpbx = urlDecode(response.substr(dpbxPos + 6, cEnd - (dpbxPos + 6)));
+                                    }
                                 }
                                 else
                                 {
-                                    ryuu = urlDecode(response.substr(rStart, cEnd - rStart));
+                                    if (hubcapPos != std::string::npos && hubcapPos < cEnd)
+                                    {
+                                        ryuu = urlDecode(response.substr(rStart, hubcapPos - rStart));
+                                        hubcap = urlDecode(response.substr(hubcapPos + 8, cEnd - (hubcapPos + 8)));
+                                    }
+                                    else
+                                    {
+                                        ryuu = urlDecode(response.substr(rStart, cEnd - rStart));
+                                    }
                                 }
 
                                 std::string timestamp = response.substr(cEnd + 4, response.find_first_of("\"", cEnd + 4) - (cEnd + 4));
@@ -762,7 +779,8 @@ namespace StoreInject
                                     if (!morr.empty()) g_config.morrenusKey = morr;
                                     if (!ryuu.empty()) g_config.ryuuKey = ryuu;
                                     if (!dpbx.empty()) g_config.depotBoxKey = dpbx;
-                                    g_config.updateApiAuth(g_config.morrenusKey.get(), g_config.ryuuKey.get(), g_config.depotBoxKey.get());
+                                    if (!hubcap.empty()) g_config.hubcapKey = hubcap;
+                                    g_config.updateApiAuth(g_config.morrenusKey.get(), g_config.ryuuKey.get(), g_config.depotBoxKey.get(), g_config.hubcapKey.get());
                                 }
                             }
                         }

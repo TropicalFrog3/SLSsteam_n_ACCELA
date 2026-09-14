@@ -756,6 +756,7 @@ namespace CDPInject
             std::string morrKey = g_config.morrenusKey.get();
             std::string ryuuKey = g_config.ryuuKey.get();
             std::string dpbxKey = g_config.depotBoxKey.get();
+            std::string hubcapKey = g_config.hubcapKey.get();
 
             size_t pos;
             if ((pos = storePageScript.find("%MORR_KEY%")) != std::string::npos)
@@ -764,6 +765,8 @@ namespace CDPInject
                 storePageScript.replace(pos, 10, ryuuKey);
             if ((pos = storePageScript.find("%DPBX_KEY%")) != std::string::npos)
                 storePageScript.replace(pos, 10, dpbxKey);
+            if ((pos = storePageScript.find("%HUBCAP_KEY%")) != std::string::npos)
+                storePageScript.replace(pos, 12, hubcapKey);
 
             cachedStorePageScript = std::move(storePageScript);
         }
