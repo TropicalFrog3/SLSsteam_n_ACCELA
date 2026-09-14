@@ -1330,29 +1330,6 @@ namespace StoreInject
                                 close(new_socket);
                             }
                         }
-                        else if (request.find("/fix-install?id=") != std::string::npos)
-                        {
-                            try {
-                                size_t idPos = request.find("id=");
-                                if (idPos != std::string::npos)
-                                {
-                                    size_t endPos = request.find_first_of(" &", idPos);
-                                    std::string idStr = request.substr(idPos + 3, (endPos == std::string::npos) ? std::string::npos : (endPos - (idPos + 3)));
-                                    uint32_t appId = std::stoul(idStr);
-                                    LOG_INFO("StoreInject: Received /fix-install for AppID %u\n", appId);
-                                    
-                                    Apps::removeInstalled(appId);
-                                    
-                                    const char* response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n";
-                                    send(new_socket, response, strlen(response), 0);
-                                    close(new_socket);
-                                    handled = true;
-                                }
-                            } catch (...) {
-                                handled = false;
-                                close(new_socket);
-                            }
-                        }
                         else if (request.find("/remove?id=") != std::string::npos)
                         {
                             size_t idPos = request.find("id=");

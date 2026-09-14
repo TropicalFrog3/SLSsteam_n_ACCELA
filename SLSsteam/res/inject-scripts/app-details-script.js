@@ -260,7 +260,7 @@
 
         // Remove any existing SLS buttons from this container before re-inserting
         parentNode.querySelectorAll(
-            '.sls-remove-lua-btn, .sls-config-btn, .sls-fix-install-btn'
+            '.sls-remove-lua-btn, .sls-config-btn'
         ).forEach(function(el) { el.remove(); });
 
         // 1. Remove Lua Button
@@ -268,7 +268,7 @@
         removeBtn.className = 'sls-remove-lua-btn';
         removeBtn.dataset.slsAppId = appid;
         removeBtn.style.display = 'inline-block';
-        removeBtn.style.marginLeft = '8px';
+        removeBtn.style.marginRight = '8px';
         
         var luaLink = document.createElement('a');
         luaLink.href = 'javascript:void(0)';
@@ -286,7 +286,7 @@
         configBtn.className = 'sls-config-btn';
         configBtn.dataset.slsAppId = appid;
         configBtn.style.display = 'inline-block';
-        configBtn.style.marginLeft = '8px';
+        configBtn.style.marginRight = '8px';
         
         var configLink = document.createElement('a');
         configLink.href = 'javascript:void(0)';
@@ -303,63 +303,6 @@
             e.preventDefault();
             e.stopPropagation();
             openSlsConfig(appid);
-        };
-
-        // 3. Fix Install Button
-        var fixInstallBtn = document.createElement('div');
-        fixInstallBtn.className = 'sls-fix-install-btn';
-        fixInstallBtn.dataset.slsAppId = appid;
-        fixInstallBtn.style.display = 'inline-block';
-        fixInstallBtn.style.marginLeft = '8px';
-        
-        var fixInstallLink = document.createElement('a');
-        fixInstallLink.href = 'javascript:void(0)';
-        fixInstallLink.style.cssText = 'display: inline-block; background: linear-gradient(to right, #75b022 5%, #588a1b 95%); border-radius: 2px; padding: 1px; cursor: pointer; text-decoration: none; filter: hue-rotate(280deg) brightness(1.2); box-shadow: 0 1px 3px rgba(0,0,0,0.4);';
-        
-        var fixInstallSpan = document.createElement('span');
-        fixInstallSpan.style.cssText = 'display: block; background: transparent; padding: 0 15px; font-size: 15px; line-height: 30px; color: #d2efa9; text-shadow: 1px 1px 2px rgba(0,0,0,0.3); font-family: "Motiva Sans", sans-serif;';
-        fixInstallSpan.innerText = 'Fix Install';
-        
-        fixInstallLink.appendChild(fixInstallSpan);
-        fixInstallBtn.appendChild(fixInstallLink);
-
-        fixInstallLink.onclick = function(e) {
-            e.preventDefault();
-            e.stopPropagation();
-            
-            log('Fix Install clicked for ' + appid);
-            
-            var modalOverlay = document.createElement('div');
-            modalOverlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:999999;display:flex;justify-content:center;align-items:center;backdrop-filter:blur(5px);';
-            modalOverlay.innerHTML = '<div style="background:#1a1c23;border:1px solid #2a2d36;border-radius:12px;padding:30px;width:400px;box-shadow:0 15px 30px rgba(0,0,0,0.5);font-family:Inter,sans-serif;color:#fff;text-align:center;">' +
-                '<h2 style="margin:0 0 10px;font-size:20px;font-weight:600;color:#e8e9eb;">Fix Install</h2>' +
-                '<p style="margin:0 0 20px;font-size:13px;color:#8a8d96;">Remove AppID <b>' + appid + '</b> from the installed list in .SLSsteam.json?</p>' +
-                '<div style="display:flex;justify-content:center;gap:10px;">' +
-                    '<button id="sls-fix-cancel" style="background:transparent;border:1px solid #333640;color:#e8e9eb;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;">Cancel</button>' +
-                    '<button id="sls-fix-confirm" style="background:#0ea5e9;border:none;color:#fff;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;box-shadow:0 4px 10px rgba(14,165,233,0.3);">Confirm</button>' +
-                '</div>' +
-            '</div>';
-            
-            document.body.appendChild(modalOverlay);
-
-            document.getElementById('sls-fix-cancel').onclick = function() { modalOverlay.remove(); };
-            document.getElementById('sls-fix-confirm').onclick = function() {
-                var confirmBtn = document.getElementById('sls-fix-confirm');
-                confirmBtn.innerText = 'Processing...';
-                confirmBtn.style.opacity = '0.5';
-                confirmBtn.style.pointerEvents = 'none';
-                
-                fetch('http://127.0.0.1:9001/fix-install?id=' + appid, { mode: 'no-cors' })
-                    .then(function() {
-                        fixInstallSpan.innerText = 'Fixed!';
-                        fixInstallLink.style.pointerEvents = 'none';
-                        fixInstallLink.style.opacity = '0.6';
-                        modalOverlay.remove();
-                    })
-                    .catch(function() {
-                        confirmBtn.innerText = 'Failed';
-                    });
-            };
         };
 
         function setRestartState() {
@@ -422,8 +365,7 @@
 
         // Insert SLS buttons BEFORE the Manage gear (manageContainer),
         // so they appear first in the row. Reverse insertion order keeps
-        // visual order: Remove Lua → Config → Fix Install.
-        parentNode.insertBefore(fixInstallBtn, parentNode.firstChild);
+        // visual order: Remove Lua → Config.
         parentNode.insertBefore(configBtn, parentNode.firstChild);
         parentNode.insertBefore(removeBtn, parentNode.firstChild);
     }
