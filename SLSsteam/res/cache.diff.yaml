@@ -1,0 +1,8 @@
+# cache.diff.yaml
+# Declarative migration rules for cache layout, storage paths, and file naming changes.
+# Supports $(OldKey)$(NewKey): bridge syntax with actions: rename_dir, rename_files, remove_dir.
+# NOTE: The luas and manifests directories are strictly preserved with NO diffs, NO deletions, and NO changes.
+
+CacheVersion: 1
+
+Migrations: {}

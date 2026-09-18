@@ -5,11 +5,15 @@
 
 #include <yaml-cpp/yaml.h>
 #include <curl/curl.h>
+#include <openssl/sha.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -18,14 +22,59 @@ namespace AutoUpdate
 {
     static const char* REMOTE_VERSION_URL = "https://raw.githubusercontent.com/TropicalFrog3/SLSsteam_n_ACCELA/refs/heads/main/SLSsteam/res/version";
 
+    static std::string getRemoteVersionUrl()
+    {
+        const char* envUrl = std::getenv("SLS_UPDATE_VERSION_URL");
+        if (envUrl && envUrl[0] != '\0')
+        {
+            return std::string(envUrl);
+        }
+        return REMOTE_VERSION_URL;
+    }
+
     static size_t curlWriteCallback(void* ptr, size_t size, size_t nmemb, void* userdata)
     {
         auto* file = static_cast<FILE*>(userdata);
         return fwrite(ptr, size, nmemb, file);
     }
 
+    static void sendNotification(const std::string& title, const std::string& msg, const std::string& urgency = "normal")
+    {
+        const char* testEnv = std::getenv("SLS_TEST_ENV");
+        if (testEnv && (std::string(testEnv) == "1" || std::string(testEnv) == "true"))
+        {
+            return;
+        }
+        std::string cmd = "notify-send -u " + urgency + " \"" + title + "\" \"" + msg + "\" 2>/dev/null";
+        system(cmd.c_str());
+    }
+
     static bool downloadToFile(const std::string& url, const std::string& destPath)
     {
+        // Support local file paths and file:// scheme for testing and offline faking
+        std::string localFilePath;
+        if (url.rfind("file://", 0) == 0)
+        {
+            localFilePath = url.substr(7);
+        }
+        else if (url.rfind("/", 0) == 0)
+        {
+            localFilePath = url;
+        }
+
+        if (!localFilePath.empty())
+        {
+            std::error_code ec;
+            std::filesystem::copy_file(localFilePath, destPath, std::filesystem::copy_options::overwrite_existing, ec);
+            if (!ec)
+            {
+                LOG_INFO("AutoUpdate: Copied mock release from %s -> %s\n", localFilePath.c_str(), destPath.c_str());
+                return true;
+            }
+            LOG_WARN("AutoUpdate: Failed to copy local mock release: %s\n", ec.message().c_str());
+            return false;
+        }
+
         CURL* curl = curl_easy_init();
         if (!curl) return false;
 
@@ -108,16 +157,113 @@ namespace AutoUpdate
         return false;
     }
 
+    static std::string calculateSHA256(const std::string& filePath)
+    {
+        unsigned char hash[SHA256_DIGEST_LENGTH];
+        SHA256_CTX sha256;
+        if (!SHA256_Init(&sha256)) return "";
+
+        std::ifstream file(filePath, std::ios::binary);
+        if (!file.is_open()) return "";
+
+        char buffer[32768];
+        while (file.read(buffer, sizeof(buffer)))
+        {
+            SHA256_Update(&sha256, buffer, file.gcount());
+        }
+        if (file.gcount() > 0)
+        {
+            SHA256_Update(&sha256, buffer, file.gcount());
+        }
+
+        SHA256_Final(hash, &sha256);
+
+        std::ostringstream ss;
+        for (int i = 0; i < SHA256_DIGEST_LENGTH; i++)
+        {
+            ss << std::hex << std::setw(2) << std::setfill('0') << (int)hash[i];
+        }
+        return ss.str();
+    }
+
+    static bool validateManifest(const std::string& releaseRoot)
+    {
+        std::string manifestPath = releaseRoot + "/update-manifest.yaml";
+        if (!std::filesystem::exists(manifestPath))
+        {
+            LOG_INFO("AutoUpdate: No update-manifest.yaml found in release, skipping checksum validation.\n");
+            return true;
+        }
+
+        try
+        {
+            YAML::Node manifest = YAML::LoadFile(manifestPath);
+            if (!manifest["files"] || !manifest["files"].IsMap())
+            {
+                LOG_WARN("AutoUpdate: update-manifest.yaml has invalid format\n");
+                return false;
+            }
+
+            for (auto it = manifest["files"].begin(); it != manifest["files"].end(); ++it)
+            {
+                std::string relPath = it->first.as<std::string>();
+                std::string expectedHash = it->second.as<std::string>();
+
+                std::filesystem::path fullPath = std::filesystem::path(releaseRoot) / relPath;
+                if (!std::filesystem::exists(fullPath))
+                {
+                    LOG_WARN("AutoUpdate: Manifest validation failed: missing file %s\n", relPath.c_str());
+                    return false;
+                }
+
+                std::string actualHash = calculateSHA256(fullPath.string());
+                if (actualHash != expectedHash)
+                {
+                    LOG_WARN("AutoUpdate: Manifest checksum mismatch for %s (expected: %s, actual: %s)\n",
+                             relPath.c_str(), expectedHash.c_str(), actualHash.c_str());
+                    return false;
+                }
+            }
+
+            LOG_INFO("AutoUpdate: Payload integrity verified successfully with update-manifest.yaml\n");
+            return true;
+        }
+        catch (const std::exception& e)
+        {
+            LOG_WARN("AutoUpdate: Error reading update-manifest.yaml: %s\n", e.what());
+            return false;
+        }
+    }
+
     static void doCheckAndPrompt()
     {
         LOG_INFO("AutoUpdate: Checking for updates...\n");
 
+        std::string versionUrl = getRemoteVersionUrl();
         std::string data;
-        int res = Curl::getString(REMOTE_VERSION_URL, data);
-        if (res != 0)
+
+        if (versionUrl.rfind("file://", 0) == 0 || versionUrl.rfind("/", 0) == 0)
         {
-            LOG_DEBUG("AutoUpdate: Failed to fetch remote version (curl code %d)\n", res);
-            return;
+            std::string localPath = (versionUrl.rfind("file://", 0) == 0) ? versionUrl.substr(7) : versionUrl;
+            std::ifstream vf(localPath);
+            if (!vf.is_open())
+            {
+                LOG_DEBUG("AutoUpdate: Failed to open local version manifest %s\n", localPath.c_str());
+                return;
+            }
+            std::ostringstream ss;
+            ss << vf.rdbuf();
+            data = ss.str();
+            LOG_INFO("AutoUpdate: Read mock version manifest from %s\n", localPath.c_str());
+        }
+        else
+        {
+            int res = Curl::getString(versionUrl.c_str(), data);
+            if (res != 0)
+            {
+                LOG_DEBUG("AutoUpdate: Failed to fetch remote version (curl code %d)\n", res);
+                return;
+            }
         }
 
         std::string remoteVersionStr;
@@ -165,68 +311,96 @@ namespace AutoUpdate
         std::string text = std::string(VERSION) + " -> " + remoteVersionStr + 
                            " newer update is available, would you like to update now?\n\nDetails of the update:\n" + changelog;
 
-        // Fork to launch zenity dialog safely
-        pid_t pid = fork();
-        if (pid < 0)
-        {
-            LOG_WARN("AutoUpdate: fork() failed for update prompt\n");
-            return;
-        }
+        const char* autoAcceptEnv = std::getenv("SLS_UPDATE_AUTO_ACCEPT");
+        bool autoAccept = (autoAcceptEnv && (std::string(autoAcceptEnv) == "1" || std::string(autoAcceptEnv) == "true"));
 
-        if (pid == 0)
+        if (!autoAccept)
         {
-            // Child process: launch zenity
-            execlp("zenity", "zenity", "--question", "--title=SLSsteam Update", 
-                   "--text", text.c_str(), "--ok-label=Install", "--cancel-label=Close", 
-                   "--width=550", "--height=350", nullptr);
-            _exit(127); // If zenity is missing
-        }
+            // Fork to launch zenity dialog safely
+            pid_t pid = fork();
+            if (pid < 0)
+            {
+                LOG_WARN("AutoUpdate: fork() failed for update prompt\n");
+                return;
+            }
 
-        int status = 0;
-        if (waitpid(pid, &status, 0) < 0)
-        {
-            LOG_WARN("AutoUpdate: waitpid() failed on prompt\n");
-            return;
-        }
+            if (pid == 0)
+            {
+                // Child process: launch zenity
+                execlp("zenity", "zenity", "--question", "--title=SLSsteam Update", 
+                       "--text", text.c_str(), "--ok-label=Install", "--cancel-label=Close", 
+                       "--width=550", "--height=350", nullptr);
+                _exit(127); // If zenity is missing
+            }
 
-        if (!WIFEXITED(status))
-        {
-            return;
-        }
+            int status = 0;
+            if (waitpid(pid, &status, 0) < 0)
+            {
+                LOG_WARN("AutoUpdate: waitpid() failed on prompt\n");
+                return;
+            }
 
-        int exitStatus = WEXITSTATUS(status);
-        if (exitStatus == 127)
-        {
-            LOG_INFO("AutoUpdate: zenity not found. Falling back to notify-send alert.\n");
-            system("notify-send -u normal \"SLSsteam\" \"Update available! Newer version is ready. Run setup.sh to update.\"");
-            return;
-        }
+            if (!WIFEXITED(status))
+            {
+                return;
+            }
 
-        if (exitStatus != 0)
+            int exitStatus = WEXITSTATUS(status);
+            if (exitStatus == 127)
+            {
+                LOG_INFO("AutoUpdate: zenity not found. Falling back to notification alert.\n");
+                sendNotification("SLSsteam", "Update available! Newer version is ready. Run setup.sh to update.");
+                return;
+            }
+
+            if (exitStatus != 0)
+            {
+                // User cancelled/closed the dialog
+                LOG_INFO("AutoUpdate: User declined the update.\n");
+                return;
+            }
+        }
+        else
         {
-            // User cancelled/closed the dialog
-            LOG_INFO("AutoUpdate: User declined the update.\n");
-            return;
+            LOG_INFO("AutoUpdate: SLS_UPDATE_AUTO_ACCEPT is enabled, auto-accepting update.\n");
         }
 
         // User clicked "Install"
         LOG_INFO("AutoUpdate: User accepted update. Starting download...\n");
-        system("notify-send -t 5000 \"SLSsteam\" \"Downloading update...\"");
+        sendNotification("SLSsteam", "Downloading update...");
 
         // Determine destination folder
         const char* home = getenv("HOME");
         if (!home)
         {
             LOG_WARN("AutoUpdate: HOME environment variable not set, aborting update.\n");
-            system("notify-send -u critical \"SLSsteam\" \"Update failed: HOME environment variable not found.\"");
+            sendNotification("SLSsteam", "Update failed: HOME environment variable not found.", "critical");
             return;
         }
 
+        bool isFlatpak = false;
         std::string installDir = std::string(home) + "/.local/share/SLSsteam";
         if (std::filesystem::exists(std::string(home) + "/.var/app/com.valvesoftware.Steam/.local/share/SLSsteam/SLSsteam.so"))
         {
             installDir = std::string(home) + "/.var/app/com.valvesoftware.Steam/.local/share/SLSsteam";
+            isFlatpak = true;
         }
+
+        // Setup secure, isolated staging directory in user directory
+        std::string updatesBaseDir = installDir + "/updates";
+        auto now = std::chrono::system_clock::now().time_since_epoch();
+        long long timestamp = std::chrono::duration_cast<std::chrono::seconds>(now).count();
+        std::string stagingDir = updatesBaseDir + "/staging_" + std::to_string(timestamp) + "_" + std::to_string(getpid());
+
+        std::error_code ec;
+        std::filesystem::create_directories(stagingDir, ec);
+        if (ec)
+        {
+            LOG_WARN("AutoUpdate: Failed to create staging directory %s: %s\n", stagingDir.c_str(), ec.message().c_str());
+            sendNotification("SLSsteam", "Update failed: Could not create staging directory.", "critical");
+            return;
+        }
+        std::filesystem::permissions(stagingDir, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace, ec);
 
         std::string ext = ".zip";
         if (downloadUrl.find(".7z") != std::string::npos)
@@ -234,24 +408,20 @@ namespace AutoUpdate
             ext = ".7z";
         }
 
-        std::string archivePath = "/tmp/SLSsteam_update" + ext;
-        std::string extractDir = "/tmp/SLSsteam_update_extracted";
+        std::string archivePath = stagingDir + "/release" + ext;
+        std::string extractDir = stagingDir + "/extracted";
 
         if (!downloadToFile(downloadUrl, archivePath))
         {
             LOG_WARN("AutoUpdate: Failed to download update from %s\n", downloadUrl.c_str());
-            system("notify-send -u critical \"SLSsteam\" \"Update failed: Download failed.\"");
+            sendNotification("SLSsteam", "Update failed: Download failed.", "critical");
+            std::filesystem::remove_all(stagingDir, ec);
             return;
         }
 
-        if (std::filesystem::exists(extractDir))
-        {
-            std::filesystem::remove_all(extractDir);
-        }
-        std::filesystem::create_directories(extractDir);
+        std::filesystem::create_directories(extractDir, ec);
 
         bool extracted = false;
-
         if (ext == ".zip")
         {
             pid_t extPid = fork();
@@ -268,7 +438,7 @@ namespace AutoUpdate
             }
             else
             {
-                // Try 7z fallback for zip
+                // Fallback to 7z
                 extPid = fork();
                 if (extPid == 0)
                 {
@@ -303,128 +473,221 @@ namespace AutoUpdate
         if (!extracted)
         {
             LOG_WARN("AutoUpdate: Extraction failed for %s\n", archivePath.c_str());
-            system("notify-send -u critical \"SLSsteam\" \"Update failed: Extraction tools not found or failed.\"");
-            std::filesystem::remove(archivePath);
-            std::filesystem::remove_all(extractDir);
+            sendNotification("SLSsteam", "Update failed: Extraction tools not found or failed.", "critical");
+            std::filesystem::remove_all(stagingDir, ec);
             return;
         }
 
-        // Instead of copying .so files while Steam is running (which crashes it),
-        // we write a helper script that kills Steam first, then copies, then relaunches.
-        LOG_INFO("AutoUpdate: Preparing update installer script...\n");
-        system("notify-send -u normal \"SLSsteam\" \"Update downloaded! Applying update, please wait...\"");
+        // Locate release root directory (can be extractDir or nested subdirectory)
+        std::string releaseRoot = extractDir;
+        if (!std::filesystem::exists(releaseRoot + "/install.sh"))
+        {
+            for (const auto& entry : std::filesystem::directory_iterator(extractDir))
+            {
+                if (entry.is_directory() && std::filesystem::exists(entry.path() / "install.sh"))
+                {
+                    releaseRoot = entry.path().string();
+                    break;
+                }
+            }
+        }
 
-        // Build the helper script that runs after Steam exits
-        // IMPORTANT: Script name must NOT contain "steam" to avoid pkill/pgrep self-match
-        std::string scriptPath = "/tmp/sls_patcher.sh";
+        // Validate archive structure
+        if (!std::filesystem::exists(releaseRoot + "/install.sh"))
+        {
+            LOG_WARN("AutoUpdate: install.sh missing in extracted archive at %s\n", releaseRoot.c_str());
+            sendNotification("SLSsteam", "Update failed: Corrupted archive, install.sh missing.", "critical");
+            std::filesystem::remove_all(stagingDir, ec);
+            return;
+        }
+
+        // Validate payload integrity against update-manifest.yaml if present
+        if (!validateManifest(releaseRoot))
+        {
+            LOG_WARN("AutoUpdate: Integrity verification failed for %s\n", releaseRoot.c_str());
+            sendNotification("SLSsteam", "Update failed: Payload integrity check failed.", "critical");
+            std::filesystem::remove_all(stagingDir, ec);
+            return;
+        }
+
+        LOG_INFO("AutoUpdate: Preparing transactional update script...\n");
+        sendNotification("SLSsteam", "Update verified! Applying update, please wait...");
+
+        std::string scriptPath = stagingDir + "/updater.sh";
         {
             std::ofstream script(scriptPath);
             if (!script.is_open())
             {
-                LOG_WARN("AutoUpdate: Failed to create update script at %s\n", scriptPath.c_str());
-                system("notify-send -u critical \"SLSsteam\" \"Update failed: Could not create update script.\"");
-                std::filesystem::remove(archivePath);
-                std::filesystem::remove_all(extractDir);
+                LOG_WARN("AutoUpdate: Failed to create updater script at %s\n", scriptPath.c_str());
+                sendNotification("SLSsteam", "Update failed: Could not create updater script.", "critical");
+                std::filesystem::remove_all(stagingDir, ec);
                 return;
             }
 
             script << "#!/bin/bash\n";
-            script << "# Auto-generated patcher script\n";
-            script << "sleep 1\n";
+            script << "set -u\n\n";
+            script << "log() {\n";
+            script << "    echo \"[SLS_UPDATER] $1\"\n";
+            script << "}\n\n";
 
-            // Gracefully shut down Steam, then force-kill if needed
-            script << "steam -shutdown 2>/dev/null || true\n";
-            script << "sleep 5\n";
-            // Force-kill any remaining steam processes (but exclude this script via grep -v)
-            script << "pkill -9 -x steam 2>/dev/null || true\n";
-            script << "sleep 2\n";
-            // Wait until the main steam binary is gone (match exact name, not this script)
-            script << "while pgrep -x steam > /dev/null 2>&1; do sleep 1; done\n";
-            script << "sleep 1\n";
-
-            // Copy all files from extract dir to install dir
-            for (const auto& entry : std::filesystem::recursive_directory_iterator(extractDir))
+            // 1. Graceful Steam termination with fallback to SIGTERM and SIGKILL
+            script << "if [ \"${SLS_TEST_ENV:-0}\" != \"1\" ]; then\n";
+            script << "    log \"Requesting Steam shutdown...\"\n";
+            if (isFlatpak)
             {
-                if (!entry.is_regular_file()) continue;
-
-                std::string pathStr = entry.path().string();
-                std::string filename = entry.path().filename().string();
-                std::filesystem::path destPath;
-
-                if (filename == "SLSsteam.so")
-                {
-                    destPath = std::filesystem::path(installDir) / "SLSsteam.so";
-                }
-                else if (filename == "library-inject.so")
-                {
-                    destPath = std::filesystem::path(installDir) / "library-inject.so";
-                }
-                else
-                {
-                    // Only copy resources from the SLSsteam portion of the
-                    // combined release; ACCELA has its own res directory.
-                    const std::string slsResRoot = extractDir + "/SLSsteam/res/";
-                    if (pathStr.rfind(slsResRoot, 0) == 0)
-                    {
-                        std::string relativeResPath = pathStr.substr(slsResRoot.size());
-                        destPath = std::filesystem::path(installDir) / "res" / relativeResPath;
-                    }
-                }
-
-                if (!destPath.empty())
-                {
-                    // Ensure parent directory exists
-                    script << "mkdir -p \"" << destPath.parent_path().string() << "\"\n";
-                    script << "cp -f \"" << entry.path().string() << "\" \"" << destPath.string() << "\"\n";
-                    LOG_INFO("AutoUpdate: Queued copy %s -> %s\n", filename.c_str(), destPath.c_str());
-                }
+                script << "    if command -v flatpak >/dev/null 2>&1; then\n";
+                script << "        flatpak kill com.valvesoftware.Steam 2>/dev/null || true\n";
+                script << "    fi\n";
+            }
+            else
+            {
+                script << "    steam -shutdown 2>/dev/null || true\n";
             }
 
-            // Leave the extracted release available for the new SLSsteam binary.
-            // It consumes this marker after Steam starts, allowing the combined
-            // installer to refresh ACCELA and Headcrab during the transition.
-            const std::string pendingUpdate = installDir + "/.pending-full-update";
-            script << "if [ -f \"" << extractDir << "/install.sh\" ]; then\n";
-            script << "    printf '%s\\n' \"" << extractDir << "\" > \"" << pendingUpdate << "\"\n";
+            script << "    TIMEOUT=10\n";
+            script << "    while [ $TIMEOUT -gt 0 ]; do\n";
+            script << "        if ! pgrep -x steam >/dev/null 2>&1; then break; fi\n";
+            script << "        sleep 1\n";
+            script << "        TIMEOUT=$((TIMEOUT - 1))\n";
+            script << "    done\n\n";
+
+            script << "    if pgrep -x steam >/dev/null 2>&1; then\n";
+            script << "        log \"Steam still active, sending SIGTERM...\"\n";
+            script << "        pkill -TERM -x steam 2>/dev/null || true\n";
+            script << "        sleep 3\n";
+            script << "    fi\n\n";
+
+            script << "    if pgrep -x steam >/dev/null 2>&1; then\n";
+            script << "        log \"Steam still active, sending SIGKILL as last resort...\"\n";
+            script << "        pkill -9 -x steam 2>/dev/null || true\n";
+            script << "        sleep 2\n";
+            script << "    fi\n\n";
+
+            script << "    while pgrep -x steam >/dev/null 2>&1; do sleep 1; done\n";
+            script << "    log \"Steam processes fully terminated.\"\n";
             script << "else\n";
-            script << "    rm -rf \"" << extractDir << "\"\n";
-            script << "fi\n";
+            script << "    log \"Test environment: skipping Steam termination.\"\n";
+            script << "fi\n\n";
 
-            // Clean up the downloaded archive. The extracted release is removed
-            // by the one-time startup installer after it finishes.
-            script << "rm -f \"" << archivePath << "\"\n";
+            // 2. Back up user config
+            script << "CONFIG_DIR=\"$HOME/.config/SLSsteam\"\n";
+            script << "if [ -f \"$CONFIG_DIR/config.yaml\" ]; then\n";
+            script << "    mkdir -p \"$CONFIG_DIR/backups\"\n";
+            script << "    cp -a \"$CONFIG_DIR/config.yaml\" \"$CONFIG_DIR/backups/config_$(date +%Y%m%d_%H%M%S).yaml.bak\" 2>/dev/null || true\n";
+            script << "fi\n\n";
 
-            // Notify and relaunch Steam
-            script << "notify-send -u normal \"SLSsteam\" \"Update installed! Relaunching Steam...\"\n";
-            script << "sleep 1\n";
-            script << "nohup steam </dev/null >/dev/null 2>&1 &\n";
+            // 2.5 Back up cache directories (luas and manifest directories are strictly preserved and untouched)
+            script << "CACHE_BACKUP_DIR=\"$HOME/.local/share/SLSsteam/cache_backups/cache_$(date +%Y%m%d_%H%M%S)\"\n";
+            script << "mkdir -p \"$CACHE_BACKUP_DIR\"\n";
+            script << "for cdir in \"$HOME/.local/share/ACCELA/depots\" \"$HOME/.local/share/SLSsteam/cache\"; do\n";
+            script << "    if [ -d \"$cdir\" ]; then\n";
+            script << "        mkdir -p \"$CACHE_BACKUP_DIR/$(basename \"$cdir\")\"\n";
+            script << "        cp -a \"$cdir/.\" \"$CACHE_BACKUP_DIR/$(basename \"$cdir\")/\" 2>/dev/null || true\n";
+            script << "    fi\n";
+            script << "done\n\n";
 
-            // Self-delete
-            script << "rm -f \"" << scriptPath << "\"\n";
+            // 3. Backup existing installation for rollback
+            std::string backupDir = installDir + ".backup_" + std::to_string(timestamp);
+            script << "BACKUP_DIR=\"" << backupDir << "\"\n";
+            script << "INSTALL_DIR=\"" << installDir << "\"\n";
+            script << "ROLLBACK_NEEDED=0\n\n";
+
+            script << "if [ -d \"$INSTALL_DIR\" ]; then\n";
+            script << "    log \"Creating backup of existing installation at $BACKUP_DIR...\"\n";
+            script << "    cp -a \"$INSTALL_DIR\" \"$BACKUP_DIR\" || {\n";
+            script << "        log \"Backup failed! Aborting update.\"\n";
+            script << "        [ \"${SLS_TEST_ENV:-0}\" != \"1\" ] && notify-send -u critical \"SLSsteam\" \"Update failed: Could not create backup.\"\n";
+            script << "        exit 1\n";
+            script << "    }\n";
+            script << "fi\n\n";
+
+            // 4. Run release installer while Steam is terminated
+            script << "log \"Running release installer...\"\n";
+            script << "cd \"" << releaseRoot << "\"\n";
+            script << "chmod +x ./install.sh\n";
+            script << "if ! ./install.sh; then\n";
+            script << "    log \"Release installer failed!\"\n";
+            script << "    ROLLBACK_NEEDED=1\n";
+            script << "fi\n\n";
+
+            // 5. Post-install verification
+            script << "if [ $ROLLBACK_NEEDED -eq 0 ]; then\n";
+            script << "    if [ ! -s \"$INSTALL_DIR/SLSsteam.so\" ] || [ ! -s \"$INSTALL_DIR/library-inject.so\" ]; then\n";
+            script << "        log \"Post-install verification failed: required libraries missing or empty!\"\n";
+            script << "        ROLLBACK_NEEDED=1\n";
+            script << "    fi\n";
+            script << "fi\n\n";
+
+            // 6. Rollback or finalize
+            script << "if [ $ROLLBACK_NEEDED -ne 0 ]; then\n";
+            script << "    log \"Update failed! Rolling back to backup...\"\n";
+            script << "    [ \"${SLS_TEST_ENV:-0}\" != \"1\" ] && notify-send -u critical \"SLSsteam\" \"Update failed! Rolling back...\"\n";
+            script << "    if [ -d \"$BACKUP_DIR\" ]; then\n";
+            script << "        rm -rf \"$INSTALL_DIR\"\n";
+            script << "        mv \"$BACKUP_DIR\" \"$INSTALL_DIR\"\n";
+            script << "    fi\n";
+            script << "else\n";
+            script << "    log \"Update succeeded! Cleaning up backup and staging...\"\n";
+            script << "    [ \"${SLS_TEST_ENV:-0}\" != \"1\" ] && notify-send -u normal \"SLSsteam\" \"SLSsteam & ACCELA updated successfully! Relaunching Steam...\"\n";
+            script << "    rm -rf \"$BACKUP_DIR\"\n";
+            script << "    rm -rf \"" << stagingDir << "\"\n";
+            script << "fi\n\n";
+
+            // 7. Relaunch Steam
+            script << "if [ \"${SLS_TEST_ENV:-0}\" != \"1\" ]; then\n";
+            script << "    sleep 1\n";
+            if (isFlatpak)
+            {
+                script << "    nohup flatpak run com.valvesoftware.Steam </dev/null >/dev/null 2>&1 &\n";
+            }
+            else
+            {
+                script << "    nohup steam </dev/null >/dev/null 2>&1 &\n";
+            }
+            script << "else\n";
+            script << "    log \"Test environment: skipping Steam restart.\"\n";
+            script << "fi\n\n";
+
+            script << "rm -f \"$0\" 2>/dev/null || true\n";
         }
 
-        // Make executable and launch detached
+        // Set executable permissions
         chmod(scriptPath.c_str(), 0755);
 
         pid_t scriptPid = fork();
         if (scriptPid == 0)
         {
-            // Child: detach completely and run the update script
             setsid();
-            // Close inherited file descriptors to fully detach from Steam
             close(STDIN_FILENO);
-            close(STDOUT_FILENO);
-            close(STDERR_FILENO);
+            const char* testEnv = std::getenv("SLS_TEST_ENV");
+            if (!testEnv || (std::string(testEnv) != "1" && std::string(testEnv) != "true"))
+            {
+                close(STDOUT_FILENO);
+                close(STDERR_FILENO);
+            }
             execlp("bash", "bash", scriptPath.c_str(), nullptr);
             _exit(127);
         }
 
-        LOG_INFO("AutoUpdate: Update script launched (PID %d). Steam will restart shortly.\n", scriptPid);
+        const char* testEnv = std::getenv("SLS_TEST_ENV");
+        if (testEnv && (std::string(testEnv) == "1" || std::string(testEnv) == "true"))
+        {
+            int scriptStatus = 0;
+            waitpid(scriptPid, &scriptStatus, 0);
+            LOG_INFO("AutoUpdate: Test mode: updater script finished with status %d\n", scriptStatus);
+        }
+
+        LOG_INFO("AutoUpdate: Transactional updater script launched (PID %d). Steam will restart shortly.\n", scriptPid);
     }
 
     void checkAndPrompt()
     {
         // Run on a separate detached thread to ensure zero blocking during Steam startup sequence
         std::thread(doCheckAndPrompt).detach();
+    }
+
+    void checkAndPromptSync()
+    {
+        doCheckAndPrompt();
     }
 }

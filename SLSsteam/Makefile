@@ -41,6 +41,8 @@ ifeq ($(shell type ccache &> /dev/null && echo "found"),found)
 endif
 ifeq ($(shell type mold &> /dev/null && echo "found"),found)
 	LDFLAGS += -fuse-ld=mold
+else ifeq ($(shell type ld.gold &> /dev/null && echo "found"),found)
+	LDFLAGS += -fuse-ld=gold
 endif
 
 COMPILER_VERSION := $(shell $(CXX) -dumpfullversion -dumpversion)

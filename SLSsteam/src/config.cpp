@@ -1,6 +1,8 @@
 #include "config.hpp"
 #include "config_default.hpp"
 
+#include "feats/config_migration.hpp"
+#include "feats/cache_migration.hpp"
 #include "feats/depotkeys.hpp"
 #include "filewatcher.hpp"
 #include "log.hpp"
@@ -120,6 +122,20 @@ bool CConfig::init()
 {
 	if(createFile())
 	{
+		const char* home = std::getenv("HOME");
+		if (home)
+		{
+			std::string userConfigPath = getPath();
+			std::string diffYamlPath = std::string(home) + "/.local/share/SLSsteam/res/config.diff.yaml";
+			std::string templatePath = std::string(home) + "/.local/share/SLSsteam/res/config.yaml";
+			
+			ConfigMigration::migrate(userConfigPath, diffYamlPath, templatePath);
+
+			std::string cacheDiffPath = std::string(home) + "/.local/share/SLSsteam/res/cache.diff.yaml";
+			std::string cacheVerPath = std::string(home) + "/.local/share/SLSsteam/cache_version";
+			CacheMigration::migrate(cacheDiffPath, cacheVerPath);
+		}
+
 		watcher = new CFileWatcher(onFileChange);
 		watcher->addWatch(getPath().c_str());
 

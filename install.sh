@@ -152,11 +152,15 @@ fi
 
 # 2. Install Headcrab (SLSsteam and Steam client integration)
 log_info "Installing Headcrab and SLSsteam..."
-HEADCRAB_URL="https://raw.githubusercontent.com/Deadboy666/h3adcr-b/main/headcrab.sh"
+HEADCRAB_URL="${SLS_HEADCRAB_URL:-https://raw.githubusercontent.com/Deadboy666/h3adcr-b/main/headcrab.sh}"
 HEADCRAB_SCRIPT="$(mktemp "${TMPDIR:-/tmp}/headcrab.XXXXXX.sh")"
 trap 'rm -f "$HEADCRAB_SCRIPT"' EXIT
 
-if command -v curl >/dev/null 2>&1; then
+if [[ "$HEADCRAB_URL" == file://* ]]; then
+    cp "${HEADCRAB_URL#file://}" "$HEADCRAB_SCRIPT"
+elif [ -f "$HEADCRAB_URL" ]; then
+    cp "$HEADCRAB_URL" "$HEADCRAB_SCRIPT"
+elif command -v curl >/dev/null 2>&1; then
     curl -fsSL --retry 3 --retry-delay 2 "$HEADCRAB_URL" -o "$HEADCRAB_SCRIPT"
 elif command -v wget >/dev/null 2>&1; then
     wget -q --tries=3 -O "$HEADCRAB_SCRIPT" "$HEADCRAB_URL"

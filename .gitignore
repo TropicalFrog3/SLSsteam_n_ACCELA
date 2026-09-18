@@ -69,3 +69,7 @@ result/
 .direnv/
 .envrc
 Dev-Plan.txt
+
+release/*
+prod-release/*
+SLSsteam-n-ACCELA.zip

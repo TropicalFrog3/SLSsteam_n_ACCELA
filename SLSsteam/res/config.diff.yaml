@@ -1,0 +1,14 @@
+# config.diff.yaml
+# Declarative migration rules for SLSsteam configuration schema updates.
+# Supports $(OldKey)$(NewKey): bridge syntax with actions: rename, rename_and_convert, remove, convert.
+
+Migrations:
+  1:
+    "$(LogLevels)$(LogLevelsBasic):":
+      action: rename_and_convert
+      value_mapping:
+        "0xff": 5
+        "0x0": 0
+      fallback_value: 3
+    "$(RyuuCookies)$():":
+      action: remove

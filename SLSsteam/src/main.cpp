@@ -116,55 +116,11 @@ static void runPendingReleaseInstaller()
 	for (const auto& installDir : installDirs)
 	{
 		const auto marker = std::filesystem::path(installDir) / ".pending-full-update";
-		// update-all.sh is a normal installed resource, not evidence of a
-		// pending update. Only the marker created by the accepted update flow
-		// may trigger the detached full installer.
-		if (!std::filesystem::exists(marker))
-		{
-			continue;
-		}
-
-		std::string extractDir;
 		if (std::filesystem::exists(marker))
 		{
-			std::ifstream markerFile(marker);
-			std::getline(markerFile, extractDir);
-			markerFile.close();
-			std::filesystem::remove(marker);
+			std::error_code ec;
+			std::filesystem::remove(marker, ec);
 		}
-
-		if (extractDir.empty())
-		{
-			LOG_WARN("AutoUpdate: Pending update marker is empty\n");
-			continue;
-		}
-
-		const std::filesystem::path installer = std::filesystem::path(extractDir) / "install.sh";
-
-		if (!std::filesystem::exists(installer))
-		{
-			continue;
-		}
-
-		const pid_t pid = fork();
-		if (pid < 0)
-		{
-			LOG_WARN("AutoUpdate: Failed to start pending full installer\n");
-			continue;
-		}
-
-		if (pid == 0)
-		{
-			setsid();
-			const std::string cleanupCommand =
-				"bash \"$1/install.sh\"; status=$?; rm -rf -- \"$1\"; exit $status";
-			const char* commandArg = extractDir.c_str();
-			execlp("bash", "bash", "-c", cleanupCommand.c_str(), "slssteam-full-update", commandArg, nullptr);
-			_exit(127);
-		}
-
-		LOG_INFO("AutoUpdate: Starting pending ACCELA and Headcrab update\n");
-		return;
 	}
 }
 
