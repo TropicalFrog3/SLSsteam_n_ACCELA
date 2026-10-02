@@ -4,6 +4,11 @@
     // Prevent double injection if somehow triggered twice rapidly
     if (document.getElementById('sls-depot-overlay-modal')) return;
 
+    // Never inject into supernav dropdowns, context menus, or headless contexts
+    if (document.title.indexOf('Supernav') !== -1 ||
+        document.title.indexOf('Menu') !== -1 ||
+        document.title === 'SharedJSContext') return;
+
     var appid = "%APPID%";
 
     var overlay = document.createElement('div');

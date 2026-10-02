@@ -132,10 +132,44 @@ namespace CDPInject
         std::string result;
         char buf[4096];
         int n;
+        size_t contentLength = 0;
+        size_t headerEnd = std::string::npos;
+
         while ((n = read(sock, buf, sizeof(buf) - 1)) > 0)
         {
-            buf[n] = '\0';
-            result += buf;
+            result.append(buf, n);
+
+            if (headerEnd == std::string::npos)
+            {
+                headerEnd = result.find("\r\n\r\n");
+                if (headerEnd != std::string::npos)
+                {
+                    auto clPos = result.find("Content-Length:");
+                    if (clPos == std::string::npos) clPos = result.find("content-length:");
+                    if (clPos != std::string::npos && clPos < headerEnd)
+                    {
+                        size_t valStart = result.find_first_not_of(" \t", clPos + 15);
+                        size_t valEnd = result.find_first_of("\r\n", valStart);
+                        if (valStart != std::string::npos && valEnd != std::string::npos)
+                        {
+                            try { contentLength = std::stoul(result.substr(valStart, valEnd - valStart)); } catch (...) {}
+                        }
+                    }
+                }
+            }
+
+            if (headerEnd != std::string::npos)
+            {
+                if (contentLength > 0 && result.size() >= headerEnd + 4 + contentLength)
+                {
+                    break;
+                }
+                // Handle chunked transfer ending
+                if (contentLength == 0 && result.size() >= 5 && result.substr(result.size() - 5) == "0\r\n\r\n")
+                {
+                    break;
+                }
+            }
         }
         return result;
     }
@@ -354,6 +388,25 @@ namespace CDPInject
         return pages;
     }
 
+    /**
+     * Helper: send a CDP command and read frames until we get the response
+     * with the matching ID, or timeout after maxFrames attempts.
+     */
+    static std::string cdpSendAndRecv(int sock, int id, const std::string& payload, int maxFrames = 30)
+    {
+        if (!wsSendText(sock, payload)) return {};
+
+        std::string idStr = "\"id\":" + std::to_string(id);
+        for (int i = 0; i < maxFrames; i++)
+        {
+            std::string frame = wsRecvFrame(sock);
+            if (frame.empty()) break;
+            if (frame.find(idStr) != std::string::npos)
+                return frame;
+        }
+        return {};
+    }
+
     bool injectJS(const std::string& wsUrl, const std::string& jsCode)
     {
         // WebSocket-based injection via --remote-debugging-port=8080
@@ -401,42 +454,20 @@ namespace CDPInject
             }
         }
 
-        std::string cdpPayload = R"({"id":1,"method":"Runtime.evaluate","params":{"expression":")" + escapedJs + R"(","userGesture":true,"awaitPromise":true}})";
+        // Enable Page domain to use Page.addScriptToEvaluateOnNewDocument
+        std::string pageEnablePayload = R"({"id":1,"method":"Page.enable"})";
+        cdpSendAndRecv(sock, 1, pageEnablePayload);
 
-        if (!wsSendText(sock, cdpPayload))
-        {
-            LOG_INFO("CDPInject: Failed to send CDP payload to %s\n", wsUrl.c_str());
-            close(sock);
-            return false;
-        }
+        // Add script to evaluate on new document to load injection UI faster on navigations (like Millennium)
+        std::string addScriptPayload = R"({"id":2,"method":"Page.addScriptToEvaluateOnNewDocument","params":{"source":")" + escapedJs + R"("}})";
+        cdpSendAndRecv(sock, 2, addScriptPayload);
 
-        // Read the response (we don't really need it, but consume it to be clean)
-        std::string response = wsRecvFrame(sock);
-        (void)response;
-
-        // LOG_INFO("CDPInject: Successfully injected JS into target WebSocket: %s\n", wsUrl.c_str());
+        // Evaluate immediately in the current context
+        std::string cdpPayload = R"({"id":3,"method":"Runtime.evaluate","params":{"expression":")" + escapedJs + R"(","userGesture":true,"awaitPromise":true}})";
+        cdpSendAndRecv(sock, 3, cdpPayload);
 
         close(sock);
         return true;
-    }
-
-    /**
-     * Helper: send a CDP command and read frames until we get the response
-     * with the matching ID, or timeout after maxFrames attempts.
-     */
-    static std::string cdpSendAndRecv(int sock, int id, const std::string& payload, int maxFrames = 30)
-    {
-        if (!wsSendText(sock, payload)) return {};
-
-        std::string idStr = "\"id\":" + std::to_string(id);
-        for (int i = 0; i < maxFrames; i++)
-        {
-            std::string frame = wsRecvFrame(sock);
-            if (frame.empty()) break;
-            if (frame.find(idStr) != std::string::npos)
-                return frame;
-        }
-        return {};
     }
 
     int downloadViaPage(const std::string& url, const std::string& destPath)
@@ -707,13 +738,7 @@ namespace CDPInject
         }
 
         std::string checkPayload = R"({"id":777,"method":"Runtime.evaluate","params":{"expression":")" + checkExpression + R"(","returnByValue":true}})";
-        if (!wsSendText(sock, checkPayload))
-        {
-            close(sock);
-            return false;
-        }
-
-        std::string response = wsRecvFrame(sock);
+        std::string response = cdpSendAndRecv(sock, 777, checkPayload, 10);
         close(sock);
 
         if (response.find("\"value\":true") != std::string::npos)
@@ -785,17 +810,44 @@ namespace CDPInject
         std::vector<std::string> pagesToInject;
         for (auto& page : pages)
         {
-            // We want to inject into the Steam library or store page where the user clicked Install.
-            if (page.url.find("steam://") != std::string::npos || 
-                page.url.find("steamloopback.host") != std::string::npos ||
-                page.url.find("store.steampowered.com") != std::string::npos ||
-                page.title == "Steam" ||
-                page.title.find("Library") != std::string::npos)
+            if (page.webSocketDebuggerUrl.empty()) continue;
+
+            // Never inject into supernav dropdowns, context menus, or headless contexts
+            if (page.title == "SharedJSContext" ||
+                page.title.find("Supernav") != std::string::npos ||
+                page.title.find("supernav") != std::string::npos ||
+                page.title.find("Menu") != std::string::npos ||
+                page.title == "Friends List" ||
+                page.title.empty())
             {
-                if (!page.webSocketDebuggerUrl.empty())
+                continue;
+            }
+
+            // Target the main Steam client window ("Steam") or a dedicated store page window
+            if (page.title == "Steam" ||
+                page.url.find("store.steampowered.com") != std::string::npos)
+            {
+                pagesToInject.push_back(page.webSocketDebuggerUrl);
+            }
+        }
+
+        // Fallback: if no standard window matched, pick the first valid non-menu page
+        if (pagesToInject.empty())
+        {
+            for (auto& page : pages)
+            {
+                if (page.webSocketDebuggerUrl.empty()) continue;
+                if (page.title == "SharedJSContext" ||
+                    page.title.find("Supernav") != std::string::npos ||
+                    page.title.find("supernav") != std::string::npos ||
+                    page.title.find("Menu") != std::string::npos ||
+                    page.title == "Friends List" ||
+                    page.title.empty())
                 {
-                    pagesToInject.push_back(page.webSocketDebuggerUrl);
+                    continue;
                 }
+                pagesToInject.push_back(page.webSocketDebuggerUrl);
+                break;
             }
         }
 

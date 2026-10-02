@@ -981,22 +981,24 @@ static uint32_t hkClientAppManager_InstallApp(IClientAppManager* pClientAppManag
 
 static void hkClientAppManager_ChangeAppDownloadQueuePlacement(IClientAppManager* pClientAppManager, uint32_t appId, uint32_t placement)
 {
-	LOG_INFO("hkClientAppManager_ChangeAppDownloadQueuePlacement(%p, %u, %u)\n", (void*)pClientAppManager, appId, placement);
+	// LOG_INFO("hkClientAppManager_ChangeAppDownloadQueuePlacement(%p, %u, %u)\n", (void*)pClientAppManager, appId, placement);
 
-	bool locallyOwned = g_pSteamEngine && g_pSteamEngine->getUser(0) && g_pSteamEngine->getUser(0)->isSubscribed(appId);
+	// bool locallyOwned = g_pSteamEngine && g_pSteamEngine->getUser(0) && g_pSteamEngine->getUser(0)->isSubscribed(appId);
 
-	if(locallyOwned && !g_config.isAddedAppId(appId))
-	{
-		Hooks::IClientAppManager_ChangeAppDownloadQueuePlacement.originalFn.fn(pClientAppManager, appId, placement);
-		return;
-	}
+	// if(locallyOwned && !g_config.isAddedAppId(appId))
+	// {
+	// 	Hooks::IClientAppManager_ChangeAppDownloadQueuePlacement.originalFn.fn(pClientAppManager, appId, placement);
+	// 	return;
+	// }
 
-	LOG_DEBUG("App %u (locallyOwned=%d, isAddedAppId=%d). Launching ACCELA download pipeline for update/placement.\n", appId, locallyOwned, g_config.isAddedAppId(appId));
+	// LOG_DEBUG("App %u (locallyOwned=%d, isAddedAppId=%d). Launching ACCELA download pipeline for update/placement.\n", appId, locallyOwned, g_config.isAddedAppId(appId));
 
-	if (!CppAccela::Download::launchForApp(pClientAppManager, appId, 1, 0))
-	{
-		LOG_WARN("Failed to launch ACCELA download for app %u\n", appId);
-	}
+	// if (!CppAccela::Download::launchForApp(pClientAppManager, appId, 1, 0))
+	// {
+	// 	LOG_WARN("Failed to launch ACCELA download for app %u\n", appId);
+	// }
+
+	return Hooks::IClientAppManager_ChangeAppDownloadQueuePlacement.originalFn.fn(pClientAppManager, appId, placement);
 }
 
 static uint32_t hkClientAppManager_UninstallApp(IClientAppManager* pClientAppManager, uint32_t appId, bool bComplete)

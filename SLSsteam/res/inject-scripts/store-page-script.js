@@ -14,13 +14,13 @@
     var appUnlockStatus = {};
 
     var luaProviders = [
-        { name: 'Ryuu', key: 'sls-ryuu-key' },
-        { name: 'DepotBox', key: 'sls-dpbx-key' },
-        { name: 'HubcapDB', key: 'sls-hubcap-key' },
-        { name: 'Morrenus', key: 'sls-morr-key' },
-        { name: 'Sushi', key: 'sls-sushi-key' },
-        { name: 'Spinoza', key: 'sls-spinoza-key' },
-        { name: 'TwentyTwo Cloud', key: 'sls-twentytwo-key' }
+        { name: 'Ryuu', key: 'sls-ryuu-key', url: 'https://generator.ryuu.lol' },
+        { name: 'DepotBox', key: 'sls-dpbx-key', url: 'https://depotbox.org/' },
+        { name: 'HubcapDB', key: 'sls-hubcap-key', url: 'https://hubcapmanifest.com/api-keys/stats' },
+        { name: 'Morrenus', key: 'sls-morr-key', url: '#' },
+        { name: 'Sushi', key: 'sls-sushi-key', url: '#' },
+        { name: 'Spinoza', key: 'sls-spinoza-key', url: '#' },
+        { name: 'TwentyTwo Cloud', key: 'sls-twentytwo-key', url: '#' }
     ];
 
     function getProviderOrder() {
@@ -466,11 +466,15 @@
         order.forEach(function(providerIndex, position) {
             var provider = luaProviders[providerIndex];
             var apiKey = localStorage.getItem(provider.key) || '';
+            var getKeyBtn = (provider.url && provider.url !== '#') ?
+                '<button data-sls-getkey="' + providerIndex + '" title="Get API Key" style="color:#a5b4fc;font-size:12px;margin-left:4px;padding:2px 6px;border:1px solid #3b4252;border-radius:4px;background:#252a36;cursor:pointer;">Get Key</button>' : '';
+                
             rows += '<div data-sls-provider="' + providerIndex + '" style="position:relative;overflow:hidden;display:flex;align-items:center;gap:8px;padding:10px 12px;margin-bottom:6px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:8px;">' +
                 '<strong style="padding-left:10px;position:relative;z-index:1;flex:1;color:#f5f6f8;font-size:13px;">' + provider.name + '</strong>' +
-                '<div style="position:relative;z-index:1;display:flex;align-items:center;gap:6px;min-width:190px;border:1px solid #3b4252;border-radius:5px;padding:3px 6px;">' +
+                '<div style="position:relative;z-index:1;display:flex;align-items:center;gap:6px;min-width:230px;border:1px solid #3b4252;border-radius:5px;padding:3px 6px;">' +
                 '<span title="API key" aria-hidden="true" style="color:#a5b4fc;font-size:15px;">&#128273;</span>' +
                 '<input data-sls-api-key="' + providerIndex + '" aria-label="API key for ' + escapeHtml(provider.name) + '" value="' + escapeHtml(apiKey) + '" placeholder="API key" type="text" style="min-width:0;flex:1;background:transparent;border:0;outline:0;color:#f5f6f8;padding:5px 2px;font-size:12px;" />' +
+                getKeyBtn +
                 '</div>' +
                 '<button data-sls-up="' + providerIndex + '" title="Move provider up" style="position:relative;z-index:1;margin-right:4px;background:#252a36;border:0;color:#d6d7d9;padding:5px 8px;border-radius:5px;cursor:pointer;"' + (position === 0 ? ' disabled' : '') + '>Up</button>' +
                 '<button data-sls-down="' + providerIndex + '" title="Move provider down" style="position:relative;z-index:1;margin-right:4px;background:#252a36;border:0;color:#d6d7d9;padding:5px 8px;border-radius:5px;cursor:pointer;"' + (position === order.length - 1 ? ' disabled' : '') + '>Down</button>' +
@@ -565,6 +569,18 @@
 
                 startGlobalDownloadTracking(appid, [pIdx]);
                 sendLuaRequest(appid, pIdx);
+            };
+        });
+        // Open provider page in a new Steam browser tab to get an API key
+        overlay.querySelectorAll('[data-sls-getkey]').forEach(function(button) {
+            button.onclick = function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                var pIdx = parseInt(button.getAttribute('data-sls-getkey'), 10);
+                var provider = luaProviders[pIdx];
+                if (provider && provider.url && provider.url !== '#') {
+                    window.location.href = provider.url;
+                }
             };
         });
     }
@@ -761,10 +777,7 @@
 
     function addButtons() {
         if (observer) observer.disconnect();
-        if (document.querySelector('.sls-lua-btn')) {
-            if (observer && document.body) observer.observe(document.body, { childList: true, subtree: true });
-            return;
-        }
+
         var cartBtns = document.querySelectorAll('.btn_addtocart, .btn_add_to_cart');
         for (var i = 0; i < cartBtns.length; i++) {
             var cartBtn = cartBtns[i];
@@ -819,10 +832,12 @@
                             setupDownloadButton(luaLink, luaBtn, productID, cartBtn);
                         }
                     } else {
-                        // Query the server
+                        // Query the server with a short timeout
                         (function(ll, lb, pid, cb) {
-                            fetch('http://127.0.0.1:9001/check?id=' + pid)
-                                .then(function(r) { return r.json(); })
+                            var controller = new AbortController();
+                            var timeoutId = setTimeout(function() { controller.abort(); }, 1000);
+                            fetch('http://127.0.0.1:9001/check?id=' + pid, { signal: controller.signal })
+                                .then(function(r) { clearTimeout(timeoutId); return r.json(); })
                                 .then(function(data) {
                                     appUnlockStatus[pid] = data;
                                     var isUnlocked = data.exists || data.pending;
@@ -833,6 +848,7 @@
                                     }
                                 })
                                 .catch(function() {
+                                    clearTimeout(timeoutId);
                                     ping('Check failed for ' + pid + ', defaulting to Download');
                                     setupDownloadButton(ll, lb, pid, cb);
                                 });
