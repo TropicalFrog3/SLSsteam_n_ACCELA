@@ -11,7 +11,7 @@ PROD_ACCELA_DIR="$REPO_ROOT/prod-release/ACCELA"
 
 echo "Building SLSsteam..."
 cd "$SLS_DIR"
-make
+make || "$SLS_DIR/docker/build.sh"
 
 echo "Updating prod-release for SLSsteam..."
 mkdir -p "$PROD_SLS_DIR/bin"

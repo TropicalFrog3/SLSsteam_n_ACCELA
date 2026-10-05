@@ -1,25 +1,28 @@
-Version: beta-v1.1.6
+Version: beta-v1.2.0
 Changelog: |
-  This release expands Lua downloads with configurable provider selection,
-  HubcapDB integration, improved store-page feedback, and a modular Accela
-  post-processing pipeline.
+  This release introduces transactional atomic staging and update rollbacks,
+  automated configuration and cache migrations, provider sidecar tracking
+  with on-the-fly provider switching, OS compatibility badges for depot selection,
+  and a comprehensive offline verification test suite.
 
   Highlights:
-  - Added a browser injection script that displays the compiled SLSsteam version
-    in Steam's top navigation bar through the RemoveLua injection flow.
-  - Added Lua download provider selection and configurable provider ordering.
-  - Added HubcapDB as a Lua download provider with API-key configuration and
-    download session tracking.
-  - Added HubcapKey support to the configuration and store-page injection flow.
-  - Added skeleton loading states, asynchronous injection, improved loading
-    bars, and provider-specific download tracking to the store page.
-  - Prevented duplicate API authentication keys from being stored during
-    updateApiAuth.
-  - Added YAML escaping for API authentication keys before configuration writes.
-  - Added modular Accela manifest parsing and validation.
-  - Added Steam installation path detection and directory management for Accela.
-  - Added Accela post-processing for ACF writing and manifest management.
-  - Added ZIP validation, assembly, and extraction modules for Accela downloads.
-  - Separated Accela workflow concerns into dedicated, maintainable C++ modules.
+  - Added atomic staging, transactional installation, and automatic rollbacks
+    to the auto-updater to prevent partial installs and file corruption.
+  - Added atomic file writing, backup staging, and directory merge utilities.
+  - Implemented automated configuration and cache migration engines with declarative
+    YAML rule processing.
+  - Added provider sidecar tracking (.provider) and runtime /change-provider
+    endpoint for dynamic Lua download provider switching.
+  - Added operating system metadata badges (Windows, Linux, macOS) to the depot
+    selection interface.
+  - Enhanced depot selection script with injection deduplication and custom
+    provider URL support.
+  - Added robust JSON string decoding and escape sequence handling in CEF hooks.
+  - Included accela-helper binary and injection scripts in production releases.
+  - Hardened uninstaller (uninstall.sh) with category-based isolation,
+    idempotency, and strict preservation of user manifests and luas.
+  - Added comprehensive offline test suite covering migration, update verification,
+    tamper detection, rollback, and uninstallation safety.
 
 DownloadUrl: https://github.com/TropicalFrog3/SLSsteam_n_ACCELA/releases/download/${version}/SLSsteam-n-ACCELA.zip
+
