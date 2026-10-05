@@ -1,5 +1,6 @@
 #include "config_migration.hpp"
 #include "../log.hpp"
+#include "../atomic_file.hpp"
 #include <filesystem>
 #include <fstream>
 #include <regex>
@@ -178,18 +179,11 @@ bool ConfigMigration::migrate(const std::string& userConfigPath, const std::stri
             newVersion = userConfig["ConfigVersion"].as<uint32_t>();
         }
 
-        // Always write if template introduced new keys or migration applied. 
-        // For simplicity, we just dump it out. To be atomic, write to a temp file first.
-        std::string tmpPath = userConfigPath + ".tmp";
-        std::ofstream fout(tmpPath);
-        fout << userConfig;
-        fout.close();
-
-        // fsync / flush should be handled by standard library before close, but we can do a rename which is atomic in POSIX.
-        std::error_code ec;
-        std::filesystem::rename(tmpPath, userConfigPath, ec);
-        if (ec) {
-            LOG_NOTIFY("Atomic rename failed for config migration: %s\n", ec.message().c_str());
+        // Atomically write updated config
+        std::ostringstream ss;
+        ss << userConfig;
+        if (!AtomicFile::write(userConfigPath, ss.str())) {
+            LOG_NOTIFY("Atomic write failed for config migration: %s\n", userConfigPath.c_str());
             return false;
         }
         

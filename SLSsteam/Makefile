@@ -1,6 +1,10 @@
 #Thanks to https://stackoverflow.com/questions/52034997/how-to-make-makefile-recompile-when-a-header-file-is-changed for the -MMD & -MP flags
 #Without them headers wouldn't trigger recompilation
 
+#Bare `make` (used by docker/build.sh) must build SLSsteam.so + helpers,
+#not whichever rule happens to appear first (previously bin/accela-helper)
+.DEFAULT_GOAL := audit-libs
+
 #Force g++ cause clang crashes on some hooks
 CXX := g++
 

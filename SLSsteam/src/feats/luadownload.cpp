@@ -3,6 +3,7 @@
 #include "../config.hpp"
 #include "../log.hpp"
 #include "../globals.hpp"
+#include "../atomic_file.hpp"
 #include "../CppAccela/accelapath.hpp"
 #include "../CppAccela/accelazip.hpp"
 #include "../CppAccela/accelaluaparser.hpp"
@@ -153,7 +154,10 @@ namespace LuaDownload
         CURL* curl = curl_easy_init();
         if (!curl) return -1;
 
-        FILE* fp = fopen(destPath.c_str(), "wb");
+        const std::string tmpPath = AtomicFile::makeTempPath(destPath);
+        AtomicFile::TempFileGuard guard(tmpPath);
+
+        FILE* fp = fopen(tmpPath.c_str(), "wb");
         if (!fp)
         {
             curl_easy_cleanup(curl);
@@ -204,7 +208,6 @@ namespace LuaDownload
 
             if (headers) curl_slist_free_all(headers);
             curl_easy_cleanup(curl);
-            std::filesystem::remove(destPath);
             return -1;
         }
 
@@ -213,6 +216,17 @@ namespace LuaDownload
         
         if (headers) curl_slist_free_all(headers);
         curl_easy_cleanup(curl);
+
+        if (httpCode >= 200 && httpCode < 300)
+        {
+            std::error_code ec;
+            fs::rename(tmpPath, destPath, ec);
+            if (ec)
+            {
+                fs::copy_file(tmpPath, destPath, fs::copy_options::overwrite_existing, ec);
+            }
+            guard.dismiss();
+        }
 
         return static_cast<int>(httpCode);
     }
@@ -530,27 +544,20 @@ namespace LuaDownload
             std::string filename = std::filesystem::path(manifestPath).filename().string();
             std::string destPath = depotcacheDir + "/" + filename;
 
-            try
+            if (AtomicFile::copy(manifestPath, destPath))
             {
-                std::filesystem::copy_file(manifestPath, destPath,
-                    std::filesystem::copy_options::overwrite_existing);
                 LOG_INFO("LuaDownload: Installed manifest -> %s\n", destPath.c_str());
             }
-            catch (const std::exception& e)
+            else
             {
-                LOG_INFO("LuaDownload: Failed to copy manifest %s: %s\n",
-                             filename.c_str(), e.what());
+                LOG_INFO("LuaDownload: Failed to atomically copy manifest %s\n", filename.c_str());
             }
         }
 
         // Install the .lua file
-        try
+        if (!AtomicFile::copy(files.luaFile, existingLua))
         {
-            std::filesystem::copy_file(files.luaFile, existingLua, std::filesystem::copy_options::overwrite_existing);
-        }
-        catch (const std::exception& e)
-        {
-            LOG_INFO("LuaDownload: Failed to copy lua file %s: %s\n", files.luaFile.c_str(), e.what());
+            LOG_INFO("LuaDownload: Failed to atomically copy lua file %s\n", files.luaFile.c_str());
             std::filesystem::remove_all(extractDir);
             std::filesystem::remove(zipPath);
             return false;
@@ -562,10 +569,8 @@ namespace LuaDownload
         // Save provider name to a sidecar file so the UI can show it
         {
             std::string providerPath = stplugDir + "/" + appId + ".provider";
-            std::ofstream providerFile(providerPath, std::ios::trunc);
-            if (providerFile.is_open())
+            if (AtomicFile::write(providerPath, successApi))
             {
-                providerFile << successApi;
                 LOG_DEBUG("LuaDownload: Saved provider info -> %s\n", providerPath.c_str());
             }
         }

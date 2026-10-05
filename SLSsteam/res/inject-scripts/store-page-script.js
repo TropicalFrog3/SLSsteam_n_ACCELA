@@ -10,6 +10,139 @@
     var observer = null;
     var debounceTimer = null;
 
+    function trapSteamGamepadModal(overlay, buttons) {
+        var isGrid = Array.isArray(buttons[0]);
+        var grid = isGrid ? buttons : buttons.map(function(b) { return [b]; });
+        var activeR = 0;
+        var activeC = 0;
+
+        function updateFocus() {
+            for (var r = 0; r < grid.length; r++) {
+                for (var c = 0; c < grid[r].length; c++) {
+                    var btn = grid[r][c];
+                    if (!btn) continue;
+                    if (r === activeR && c === activeC) {
+                        btn.style.outline = '3px solid #fff';
+                        btn.style.outlineOffset = '2px';
+                        if (btn.scrollIntoViewIfNeeded) btn.scrollIntoViewIfNeeded();
+                        else btn.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+                    } else {
+                        btn.style.outline = 'none';
+                    }
+                }
+            }
+        }
+        setTimeout(updateFocus, 100);
+        
+        function gamepadCatcher(e) {
+            if (!document.body.contains(overlay)) {
+                window.removeEventListener('vgp_ondirection', gamepadCatcher, true);
+                window.removeEventListener('vgp_onok', okCatcher, true);
+                window.removeEventListener('vgp_oncancel', cancelCatcher, true);
+                return;
+            }
+            e.stopPropagation(); if(e.cancelable) e.preventDefault();
+            var dir = e.detail ? e.detail.button : null;
+            var startR = activeR, startC = activeC;
+            
+            function move(dr, dc) {
+                var newR = activeR, newC = activeC;
+                var attempts = 0;
+                var maxAttempts = grid.length * 10;
+                
+                // Calculate alignment from the RIGHT side to handle ragged rows
+                var targetOffsetRight = grid[activeR].length - 1 - activeC;
+                
+                while (attempts < maxAttempts) {
+                    attempts++;
+                    if (dr !== 0) {
+                        newR += dr;
+                        if (newR < 0) newR = grid.length - 1;
+                        if (newR >= grid.length) newR = 0;
+                        
+                        // Apply right-alignment to the new row
+                        newC = grid[newR].length - 1 - targetOffsetRight;
+                        if (newC < 0) newC = 0; // Clamp to left if new row is too short
+                        if (newC >= grid[newR].length) newC = grid[newR].length - 1;
+                    }
+                    if (dc !== 0) {
+                        newC += dc;
+                        if (newC < 0) newC = grid[newR].length - 1;
+                        if (newC >= grid[newR].length) newC = 0;
+                    }
+                    var targetBtn = grid[newR][newC];
+                    if (targetBtn) {
+                        activeR = newR;
+                        activeC = newC;
+                        return;
+                    }
+                }
+            }
+
+            if (dir === 9 || dir === 14) move(-1, 0); // Up
+            else if (dir === 10 || dir === 15) move(1, 0); // Down
+            else if (dir === 11 || dir === 16) move(0, -1); // Left
+            else if (dir === 12 || dir === 17) move(0, 1); // Right
+            
+            updateFocus();
+        }
+        function okCatcher(e) {
+            if (!document.body.contains(overlay)) return;
+            e.stopPropagation(); if(e.cancelable) e.preventDefault();
+            var btn = grid[activeR] ? grid[activeR][activeC] : null;
+            if (btn && !btn.disabled) {
+                if (btn.tagName.toLowerCase() === 'input') {
+                    btn.focus();
+                    btn.select();
+                }
+                btn.click();
+            }
+        }
+        function cancelCatcher(e) {
+            if (!document.body.contains(overlay)) return;
+            e.stopPropagation(); if(e.cancelable) e.preventDefault();
+            var closeBtn = overlay.querySelector('#sls-provider-close, #sls-close-x, #sls-btn-cancel, #sls-prov-cancel, #sls-rm-cancel, #sls-depot-close-x, #sls-depot-btn-cancel');
+            if (closeBtn) closeBtn.click(); else overlay.remove();
+        }
+        window.addEventListener('vgp_ondirection', gamepadCatcher, true);
+        window.addEventListener('vgp_onok', okCatcher, true);
+        window.addEventListener('vgp_oncancel', cancelCatcher, true);
+    }
+
+    function registerSteamFocusNode(element, properties) {
+        if (!properties) properties = { focusable: true };
+        if (!element.hasAttribute('tabindex')) element.setAttribute('tabindex', '-1');
+        element.classList.add('Focusable');
+        var parent = element.parentElement;
+        var parentNode = null;
+        while (parent && parent !== document.body) {
+            var fiberKey = Object.keys(parent).find(function(key) { return key.indexOf('__reactFiber') === 0; });
+            if (fiberKey) {
+                var n = parent[fiberKey];
+                while (n) {
+                    if (n.memoizedProps && n.memoizedProps.node) {
+                        parentNode = n.memoizedProps.node;
+                        break;
+                    }
+                    n = n.return;
+                }
+            }
+            if (parentNode) break;
+            parent = parent.parentElement;
+        }
+        if (!parentNode) return null;
+        try {
+            var NavNodeClass = parentNode.constructor;
+            var newNode = new NavNodeClass(parentNode.m_Tree, parentNode, null);
+            if (newNode.SetProperties) newNode.SetProperties(properties);
+            else newNode.m_Properties = Object.assign(newNode.m_Properties || {}, properties);
+            if (newNode.OnMount) newNode.OnMount(element);
+            return newNode;
+        } catch (e) {
+            return null;
+        }
+    }
+
     // Cache of app unlock status: { appid: { exists, pending, onlineFixInstalled, autoCrackInstalled } }
     var appUnlockStatus = {};
 
@@ -467,27 +600,52 @@
             var provider = luaProviders[providerIndex];
             var apiKey = localStorage.getItem(provider.key) || '';
             var getKeyBtn = (provider.url && provider.url !== '#') ?
-                '<button data-sls-getkey="' + providerIndex + '" title="Get API Key" style="color:#a5b4fc;font-size:12px;margin-left:4px;padding:2px 6px;border:1px solid #3b4252;border-radius:4px;background:#252a36;cursor:pointer;">Get Key</button>' : '';
+                '<button data-sls-getkey="' + providerIndex + '" class="Focusable" tabindex="-1" role="button" title="Get API Key" style="color:#dcdedf;font-size:12px;margin-left:4px;padding:2px 8px;border:1px solid #3d4450;border-radius:2px;background:rgba(172,178,201,0.14);cursor:pointer;">Get Key</button>' : '';
                 
-            rows += '<div data-sls-provider="' + providerIndex + '" style="position:relative;overflow:hidden;display:flex;align-items:center;gap:8px;padding:10px 12px;margin-bottom:6px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:8px;">' +
-                '<strong style="padding-left:10px;position:relative;z-index:1;flex:1;color:#f5f6f8;font-size:13px;">' + provider.name + '</strong>' +
-                '<div style="position:relative;z-index:1;display:flex;align-items:center;gap:6px;min-width:230px;border:1px solid #3b4252;border-radius:5px;padding:3px 6px;">' +
-                '<span title="API key" aria-hidden="true" style="color:#a5b4fc;font-size:15px;">&#128273;</span>' +
-                '<input data-sls-api-key="' + providerIndex + '" aria-label="API key for ' + escapeHtml(provider.name) + '" value="' + escapeHtml(apiKey) + '" placeholder="API key" type="text" style="min-width:0;flex:1;background:transparent;border:0;outline:0;color:#f5f6f8;padding:5px 2px;font-size:12px;" />' +
+            rows += '<div data-sls-provider="' + providerIndex + '" style="position:relative;overflow:hidden;display:flex;align-items:center;gap:8px;padding:12px 14px;margin-bottom:6px;background:rgba(0,0,0,0.2);border:1px solid rgba(172,178,201,0.1);border-radius:2px;">' +
+                '<strong style="padding-left:10px;position:relative;z-index:1;flex:1;color:#dcdedf;font-size:16px;font-family:\'Motiva Sans\', sans-serif;font-weight:400;">' + provider.name + '</strong>' +
+                '<div style="position:relative;z-index:1;display:flex;align-items:center;gap:6px;min-width:230px;border:1px solid #3d4450;border-radius:2px;padding:4px 8px;background:rgba(0,0,0,0.4);">' +
+                '<span title="API key" aria-hidden="true" style="color:#969696;font-size:15px;">&#128273;</span>' +
+                '<input data-sls-api-key="' + providerIndex + '" aria-label="API key for ' + escapeHtml(provider.name) + '" value="' + escapeHtml(apiKey) + '" placeholder="API key" type="text" style="min-width:0;flex:1;background:transparent;border:0;outline:0;color:#dcdedf;padding:5px 2px;font-size:14px;font-family:\'Motiva Sans\', sans-serif;" />' +
                 getKeyBtn +
                 '</div>' +
-                '<button data-sls-up="' + providerIndex + '" title="Move provider up" style="position:relative;z-index:1;margin-right:4px;background:#252a36;border:0;color:#d6d7d9;padding:5px 8px;border-radius:5px;cursor:pointer;"' + (position === 0 ? ' disabled' : '') + '>Up</button>' +
-                '<button data-sls-down="' + providerIndex + '" title="Move provider down" style="position:relative;z-index:1;margin-right:4px;background:#252a36;border:0;color:#d6d7d9;padding:5px 8px;border-radius:5px;cursor:pointer;"' + (position === order.length - 1 ? ' disabled' : '') + '>Down</button>' +
-                '<button data-sls-provider-download="' + providerIndex + '" style="position:relative;z-index:1;margin-right:4px;background:#1a9fff;border:0;color:#fff;padding:5px 9px;border-radius:5px;cursor:pointer;">Download</button>' +
+                '<div style="display:flex;gap:4px;position:relative;z-index:1;">' +
+                '<button data-sls-up="' + providerIndex + '" class="sls-btn-action Focusable" tabindex="-1" role="button" title="Move provider up" style="height:32px;padding:0 8px;font-size:12px;"' + (position === 0 ? ' disabled' : '') + '>Up</button>' +
+                '<button data-sls-down="' + providerIndex + '" class="sls-btn-action Focusable" tabindex="-1" role="button" title="Move provider down" style="height:32px;padding:0 8px;font-size:12px;"' + (position === order.length - 1 ? ' disabled' : '') + '>Down</button>' +
+                '</div>' +
+                '<button data-sls-provider-download="' + providerIndex + '" class="sls-btn-action Focusable" tabindex="-1" role="button" style="position:relative;z-index:1;height:32px;padding:0 16px;background:#06bfff;color:#fff;">Download</button>' +
                 '</div>';
         });
-        overlay.innerHTML = '<div style="background:#161920;border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:24px;width:auto;max-width:calc(100% - 32px);box-shadow:0 20px 50px rgba(0,0,0,0.6);font-family:Arial,sans-serif;color:#f5f6f8;">' +
-            '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;"><div><h2 style="margin:0;font-size:20px;">Lua download provider</h2><p style="margin:5px 0 0;color:#8f98a0;font-size:12px;">AppID: ' + appid + '</p></div><button id="sls-provider-close" style="margin-right:4px;background:transparent;border:0;color:#9ca3af;font-size:20px;cursor:pointer;">X</button></div>' +
+        overlay.innerHTML = '<div style="background: #1e2024; border: 1px solid #3d4450; border-radius: 4px; padding: 24px; width: 680px; max-width:calc(100% - 32px); box-shadow: 0 4px 16px rgba(0,0,0,0.5); font-family: \'Motiva Sans\', sans-serif; color: #dcdedf;">' +
+            '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;">' +
+            '<div><h2 style="margin:0; font-size:22px; font-weight:300; color: #fff; text-transform: uppercase; letter-spacing: 1px;">Lua download provider</h2><p style="margin:4px 0 0;font-size:14px;color:#969696;">AppID: ' + appid + '</p></div>' +
+            '<button id="sls-provider-close" class="sls-btn-close Focusable" tabindex="-1" role="button">&times;</button></div>' +
             '<div id="sls-provider-rows">' + rows + '</div>' +
-            '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px;"><button id="sls-auto-search" style="min-width:100%;background:#4f46e5;border:0;color:#fff;padding:9px 14px;border-radius:6px;cursor:pointer;font-weight:600;">Auto Download</button></div>' +
+            '<div style="display:flex;justify-content:flex-end;gap:10px;margin-top:20px;"><button id="sls-auto-search" class="sls-btn-action Focusable" tabindex="-1" role="button" style="min-width:100%;">Auto Download</button></div>' +
+            '<style>' +
+            ' .sls-btn-action { display: flex; justify-content: center; align-items: center; background: rgba(172, 178, 201, 0.14); color: rgb(220, 222, 223); border: none; border-radius: 2px; padding: 8px 16px; font-size: 16px; font-weight: 400; font-family: "Motiva Sans", sans-serif; height: 48px; box-sizing: border-box; cursor: pointer; text-decoration: none; transition: background 0.1s ease; }' +
+            ' .sls-btn-action:not(:disabled):hover { background: rgba(172, 178, 201, 0.25); }' +
+            ' .sls-btn-action:not(:disabled):active { background: rgba(172, 178, 201, 0.30); }' +
+            ' button[data-sls-provider-download]:hover { background: #2d73ff !important; }' +
+            ' .sls-btn-close { background: transparent; border: none; color: #969696; font-size: 24px; cursor: pointer; width: 32px; height: 32px; border-radius: 2px; display: flex; align-items: center; justify-content: center; transition: background 0.1s ease; }' +
+            ' .sls-btn-close:hover { background: rgba(172, 178, 201, 0.14); color: #fff; }' +
+            ' button:disabled { opacity: 0.5; cursor: default; }' +
+            '</style>' +
             '</div>';
         document.body.appendChild(overlay);
         syncModalUI(appid);
+
+        // Controller support: collect interactive elements into a 2D grid
+        var modalButtons = [
+            [document.getElementById('sls-provider-close')]
+        ];
+        overlay.querySelectorAll('[data-sls-provider]').forEach(function(row) {
+            var rowItems = [];
+            row.querySelectorAll('[data-sls-api-key], [data-sls-getkey], [data-sls-up], [data-sls-down], [data-sls-provider-download]').forEach(function(b) { rowItems.push(b); });
+            if (rowItems.length > 0) modalButtons.push(rowItems);
+        });
+        modalButtons.push([document.getElementById('sls-auto-search')]);
+        trapSteamGamepadModal(overlay, modalButtons);
 
         function close() { overlay.remove(); }
         document.getElementById('sls-provider-close').onclick = close;
@@ -628,22 +786,31 @@
             if (document.getElementById('sls-remove-overlay')) return;
             var overlay = document.createElement('div');
             overlay.id = 'sls-remove-overlay';
-            overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:999999;display:flex;justify-content:center;align-items:center;backdrop-filter:blur(5px);';
-            overlay.innerHTML = '<div style="background:#1a1c23;border:1px solid #2a2d36;border-radius:12px;padding:30px;width:400px;box-shadow:0 15px 30px rgba(0,0,0,0.5);font-family:Inter,sans-serif;color:#fff;text-align:center;">' +
-                '<h2 style="margin:0 0 10px;font-size:20px;font-weight:600;color:#e8e9eb;">Remove Lua</h2>' +
-                '<p style="margin:0 0 20px;font-size:13px;color:#8a8d96;">Remove Lua and Game files for AppID <b>' + productID + '</b>?</p>' +
-                '<div style="display:flex;justify-content:center;gap:10px;">' +
-                    '<button id="sls-rm-cancel" style="background:transparent;border:1px solid #333640;color:#e8e9eb;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;">Cancel</button>' +
-                    '<button id="sls-rm-confirm" style="background:#ff4d4d;border:none;color:#fff;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;box-shadow:0 4px 10px rgba(255,77,77,0.3);">Remove</button>' +
+            overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:999999;display:flex;justify-content:center;align-items:center;backdrop-filter:blur(8px);';
+            overlay.innerHTML = '<div style="background: #1e2024; border: 1px solid #3d4450; border-radius: 4px; padding: 24px; width: 440px; box-shadow: 0 4px 16px rgba(0,0,0,0.5); font-family: \'Motiva Sans\', sans-serif; color: #dcdedf;">' +
+                '<h2 style="margin:0 0 10px;font-size:22px;font-weight:300;color:#fff;text-transform:uppercase;letter-spacing:1px;">Remove Lua</h2>' +
+                '<p style="margin:0 0 24px;font-size:16px;color:#969696;">Remove Lua and Game files for AppID <b>' + productID + '</b>?</p>' +
+                '<div style="display:flex;justify-content:flex-end;gap:10px;">' +
+                    '<button id="sls-rm-cancel" class="sls-btn-action Focusable" tabindex="-1" role="button" style="padding: 0 24px; height: 36px;">Cancel</button>' +
+                    '<button id="sls-rm-confirm" class="sls-btn-action Focusable" tabindex="-1" role="button" style="padding: 0 24px; height: 36px; background: rgba(220, 38, 38, 0.8); color: #fff;">Remove</button>' +
                 '</div>' +
+                '<style>' +
+                ' .sls-btn-action { display: flex; justify-content: center; align-items: center; background: rgba(172, 178, 201, 0.14); color: rgb(220, 222, 223); border: none; border-radius: 2px; padding: 8px 16px; font-size: 16px; font-weight: 400; font-family: "Motiva Sans", sans-serif; height: 48px; box-sizing: border-box; cursor: pointer; text-decoration: none; transition: background 0.1s ease; }' +
+                ' .sls-btn-action:hover { background: rgba(172, 178, 201, 0.25); }' +
+                ' .sls-btn-action:active { background: rgba(172, 178, 201, 0.30); }' +
+                ' #sls-rm-confirm:hover { background: rgba(220, 38, 38, 1) !important; }' +
+                '</style>' +
             '</div>';
             document.body.appendChild(overlay);
 
-            document.getElementById('sls-rm-cancel').onclick = function() { overlay.remove(); };
-            document.getElementById('sls-rm-confirm').onclick = function() {
-                var confirmBtn = document.getElementById('sls-rm-confirm');
-                confirmBtn.innerText = 'Processing...';
-                confirmBtn.style.opacity = '0.5';
+            var rmCancelBtn = document.getElementById('sls-rm-cancel');
+            var rmConfirmBtn = document.getElementById('sls-rm-confirm');
+            trapSteamGamepadModal(overlay, [rmCancelBtn, rmConfirmBtn]);
+
+            rmCancelBtn.onclick = function() { overlay.remove(); };
+            rmConfirmBtn.onclick = function() {
+                rmConfirmBtn.innerText = 'Processing...';
+                rmConfirmBtn.style.opacity = '0.5';
                 // confirmBtn.style.pointerEvents = 'none';
 
                 ping('Remove Lua: ' + productID);
@@ -665,66 +832,68 @@
         if (document.getElementById('sls-overlay-modal')) return;
         var overlay = document.createElement('div');
         overlay.id = 'sls-overlay-modal';
-        overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(10,12,18,0.85);z-index:999999;display:flex;justify-content:center;align-items:center;backdrop-filter:blur(8px);';
+        overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:999999;display:flex;justify-content:center;align-items:center;backdrop-filter:blur(8px);transition:all 0.3s ease;opacity:0;';
         var currentMorr = localStorage.getItem('sls-morr-key') || '%MORR_KEY%';
         var currentRyuu = localStorage.getItem('sls-ryuu-key') || '%RYUU_KEY%';
         var currentDpbx = localStorage.getItem('sls-dpbx-key') || '%DPBX_KEY%';
         var currentHubcap = localStorage.getItem('sls-hubcap-key') || '%HUBCAP_KEY%';
 
-        var cardHtml = '<div style="background: linear-gradient(145deg, #161920 0%, #0d0f14 100%); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 16px; padding: 28px; width: 440px; box-shadow: 0 20px 50px rgba(0,0,0,0.6); font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, Helvetica, Arial, sans-serif; color: #f5f6f8; transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1); transform: scale(0.95); opacity: 0;" id="sls-modal-card">' +
+        var cardHtml = '<div style="background: #1e2024; border: 1px solid #3d4450; border-radius: 4px; padding: 24px; width: 440px; box-shadow: 0 4px 16px rgba(0,0,0,0.5); font-family: \'Motiva Sans\', sans-serif; color: #dcdedf; transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1); transform: scale(0.95); opacity: 0;" id="sls-modal-card">' +
             '<!-- Title bar -->' +
-            '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:24px;">' +
+            '<div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:20px;">' +
                 '<div>' +
-                    '<h2 style="margin:0; font-size:22px; font-weight:700; background: linear-gradient(90deg, #fff 0%, #a5aab6 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">SLS Game Manager</h2>' +
-                    '<p style="margin:4px 0 0; font-size:12px; color:#6b7280; font-weight: 500;">AppID: <span style="color:#9ca3af; font-family:monospace;">' + appid + '</span></p>' +
+                    '<h2 style="margin:0; font-size:22px; font-weight:300; color: #fff; text-transform: uppercase; letter-spacing: 1px;">API Credentials</h2>' +
+                    '<p style="margin:4px 0 0; font-size:14px; color:#969696;">AppID: ' + appid + '</p>' +
                 '</div>' +
-                '<button id="sls-close-x" style="background:rgba(255,255,255,0.05); border:none; color:#9ca3af; font-size:20px; cursor:pointer; width:32px; height:32px; border-radius:50%; display:flex; align-items:center; justify-content:center; transition: all 0.2s;">&times;</button>' +
+                '<button id="sls-close-x" class="sls-btn-close Focusable" tabindex="-1" role="button">&times;</button>' +
             '</div>' +
             '<!-- API Settings Section -->' +
             '<div>' +
-                '<h3 style="margin:0 0 14px; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:1px; color:#4f46e5;">API Credentials</h3>' +
                 '<div style="margin-bottom:16px;">' +
-                    '<div style="display:flex; justify-content:space-between; margin-bottom:6px; font-size:12px; font-weight:600; color:#9ca3af;">' +
+                    '<div style="display:flex; justify-content:space-between; margin-bottom:6px; font-size:12px; font-weight:600; color:#969696;">' +
                         '<span>HubcapDB API Key</span>' +
-                        '<a href="https://hubcapmanifest.com/" target="_blank" style="color:#6366f1; text-decoration:none; transition: color 0.2s;">Get Key</a>' +
+                        '<a href="https://hubcapmanifest.com/" class="Focusable" tabindex="-1" role="button" target="_blank" style="color:#06bfff; text-decoration:none; transition: color 0.2s;">Get Key</a>' +
                     '</div>' +
-                    '<input id="sls-hubcap" type="text" value="' + currentHubcap + '" style="width:100%; box-sizing:border-box; background:#090a0f; border:1px solid rgba(255,255,255,0.08); color:#f5f6f8; padding:10px 14px; border-radius:8px; font-family:monospace; font-size:13px; outline:none; transition: all 0.2s;" placeholder="Optional..."/>' +
+                    '<input id="sls-hubcap" type="text" value="' + currentHubcap + '" style="width:100%; box-sizing:border-box; background:rgba(0,0,0,0.4); border:1px solid #3d4450; color:#dcdedf; padding:10px 14px; border-radius:2px; font-family:\'Motiva Sans\', sans-serif; font-size:14px; outline:none; transition: all 0.2s;" placeholder="Optional..."/>' +
                 '</div>' +
                 '<div style="margin-bottom:16px;">' +
-                    '<div style="display:flex; justify-content:space-between; margin-bottom:6px; font-size:12px; font-weight:600; color:#9ca3af;">' +
+                    '<div style="display:flex; justify-content:space-between; margin-bottom:6px; font-size:12px; font-weight:600; color:#969696;">' +
                         '<span>Morrenus API Key</span>' +
-                        '<a href="https://manifest.morrenus.xyz/api-keys/stats" target="_blank" style="color:#6366f1; text-decoration:none; transition: color 0.2s;">Get Key</a>' +
+                        '<a href="https://manifest.morrenus.xyz/api-keys/stats" class="Focusable" tabindex="-1" role="button" target="_blank" style="color:#06bfff; text-decoration:none; transition: color 0.2s;">Get Key</a>' +
                     '</div>' +
-                    '<input id="sls-morr" type="text" value="' + currentMorr + '" style="width:100%; box-sizing:border-box; background:#090a0f; border:1px solid rgba(255,255,255,0.08); color:#f5f6f8; padding:10px 14px; border-radius:8px; font-family:monospace; font-size:13px; outline:none; transition: all 0.2s;" placeholder="Optional..."/>' +
+                    '<input id="sls-morr" type="text" value="' + currentMorr + '" style="width:100%; box-sizing:border-box; background:rgba(0,0,0,0.4); border:1px solid #3d4450; color:#dcdedf; padding:10px 14px; border-radius:2px; font-family:\'Motiva Sans\', sans-serif; font-size:14px; outline:none; transition: all 0.2s;" placeholder="Optional..."/>' +
                 '</div>' +
-                '<div style="margin-bottom:24px;">' +
-                    '<div style="display:flex; justify-content:space-between; margin-bottom:6px; font-size:12px; font-weight:600; color:#9ca3af;">' +
+                '<div style="margin-bottom:16px;">' +
+                    '<div style="display:flex; justify-content:space-between; margin-bottom:6px; font-size:12px; font-weight:600; color:#969696;">' +
                         '<span>Ryuu API Key</span>' +
-                        '<a href="https://generator.ryuu.lol/" target="_blank" style="color:#6366f1; text-decoration:none; transition: color 0.2s;">Get Key</a>' +
+                        '<a href="https://generator.ryuu.lol/" class="Focusable" tabindex="-1" role="button" target="_blank" style="color:#06bfff; text-decoration:none; transition: color 0.2s;">Get Key</a>' +
                     '</div>' +
-                    '<input id="sls-ryuu" type="text" value="' + currentRyuu + '" style="width:100%; box-sizing:border-box; background:#090a0f; border:1px solid rgba(255,255,255,0.08); color:#f5f6f8; padding:10px 14px; border-radius:8px; font-family:monospace; font-size:13px; outline:none; transition: all 0.2s;" placeholder="Optional..."/>' +
+                    '<input id="sls-ryuu" type="text" value="' + currentRyuu + '" style="width:100%; box-sizing:border-box; background:rgba(0,0,0,0.4); border:1px solid #3d4450; color:#dcdedf; padding:10px 14px; border-radius:2px; font-family:\'Motiva Sans\', sans-serif; font-size:14px; outline:none; transition: all 0.2s;" placeholder="Optional..."/>' +
                 '</div>' +
                 '<div style="margin-bottom:24px;">' +
-                    '<div style="display:flex; justify-content:space-between; margin-bottom:6px; font-size:12px; font-weight:600; color:#9ca3af;">' +
+                    '<div style="display:flex; justify-content:space-between; margin-bottom:6px; font-size:12px; font-weight:600; color:#969696;">' +
                         '<span>DepotBox API Key</span>' +
-                        '<a href="https://depotbox.org/pricing" target="_blank" style="color:#6366f1; text-decoration:none; transition: color 0.2s;">Get Key</a>' +
+                        '<a href="https://depotbox.org/pricing" class="Focusable" tabindex="-1" role="button" target="_blank" style="color:#06bfff; text-decoration:none; transition: color 0.2s;">Get Key</a>' +
                     '</div>' +
-                    '<input id="sls-dpbx" type="text" value="' + currentDpbx + '" style="width:100%; box-sizing:border-box; background:#090a0f; border:1px solid rgba(255,255,255,0.08); color:#f5f6f8; padding:10px 14px; border-radius:8px; font-family:monospace; font-size:13px; outline:none; transition: all 0.2s;" placeholder="Optional..."/>' +
+                    '<input id="sls-dpbx" type="text" value="' + currentDpbx + '" style="width:100%; box-sizing:border-box; background:rgba(0,0,0,0.4); border:1px solid #3d4450; color:#dcdedf; padding:10px 14px; border-radius:2px; font-family:\'Motiva Sans\', sans-serif; font-size:14px; outline:none; transition: all 0.2s;" placeholder="Optional..."/>' +
                 '</div>' +
             '</div>' +
             '<!-- Footer Actions -->' +
-            '<div style="display:flex; justify-content:flex-end; gap:12px;">' +
-                '<button id="sls-btn-cancel" style="background:transparent; border:1px solid rgba(255,255,255,0.1); color:#9ca3af; padding:10px 20px; border-radius:8px; cursor:pointer; font-size:13px; font-weight:600; transition: all 0.2s;">Cancel</button>' +
-                '<button id="sls-btn-save" style="background:linear-gradient(135deg, #4f46e5 0%, #3730a3 100%); border:none; color:#fff; padding:10px 20px; border-radius:8px; cursor:pointer; font-size:13px; font-weight:600; box-shadow:0 4px 12px rgba(79,70,229,0.3); transition: all 0.2s;">Save Keys</button>' +
+            '<div style="display:flex; justify-content:flex-end; gap:10px;">' +
+                '<button id="sls-btn-cancel" class="sls-btn-action Focusable" tabindex="-1" role="button" style="padding: 0 24px; height: 36px;">Cancel</button>' +
+                '<button id="sls-btn-save" class="sls-btn-action Focusable" tabindex="-1" role="button" style="padding: 0 24px; height: 36px; background: #06bfff; color: #fff;">Save Keys</button>' +
             '</div>' +
         '</div>';
 
         overlay.innerHTML = cardHtml;
         var style = document.createElement('style');
-        style.textContent = ' #sls-close-x:hover { background: rgba(255,255,255,0.1) !important; color: #fff !important; }' +
-            ' #sls-btn-cancel:hover { background: rgba(255,255,255,0.03) !important; color: #fff !important; border-color: rgba(255,255,255,0.2) !important; }' +
-            ' #sls-btn-save:hover { box-shadow: 0 6px 20px rgba(79,70,229,0.45) !important; }' +
-            ' #sls-hubcap:focus, #sls-morr:focus, #sls-ryuu:focus, #sls-dpbx:focus { border-color: #6366f1 !important; box-shadow: 0 0 0 2px rgba(99,102,241,0.2) !important; }';
+        style.textContent = ' .sls-btn-action { display: flex; justify-content: center; align-items: center; background: rgba(172, 178, 201, 0.14); color: rgb(220, 222, 223); border: none; border-radius: 2px; padding: 8px 16px; font-size: 16px; font-weight: 400; font-family: "Motiva Sans", sans-serif; height: 48px; box-sizing: border-box; cursor: pointer; text-decoration: none; transition: background 0.1s ease; }' +
+            ' .sls-btn-action:not(:disabled):hover { background: rgba(172, 178, 201, 0.25); }' +
+            ' .sls-btn-action:not(:disabled):active { background: rgba(172, 178, 201, 0.30); }' +
+            ' #sls-btn-save:hover { background: #2d73ff !important; }' +
+            ' .sls-btn-close { background: transparent; border: none; color: #969696; font-size: 24px; cursor: pointer; width: 32px; height: 32px; border-radius: 2px; display: flex; align-items: center; justify-content: center; transition: background 0.1s ease; }' +
+            ' .sls-btn-close:hover { background: rgba(172, 178, 201, 0.14); color: #fff; }' +
+            ' #sls-hubcap:focus, #sls-morr:focus, #sls-ryuu:focus, #sls-dpbx:focus { border-color: #6366f1 !important; }';
 
         overlay.appendChild(style);
         document.body.appendChild(overlay);
@@ -754,6 +923,8 @@
         closeX.onclick = close;
         cancelBtn.onclick = close;
 
+        trapSteamGamepadModal(overlay, [closeX, saveBtn, cancelBtn]);
+
         saveBtn.onclick = function() {
             var hubcap = document.getElementById('sls-hubcap').value;
             var morr = document.getElementById('sls-morr').value;
@@ -778,100 +949,220 @@
     function addButtons() {
         if (observer) observer.disconnect();
 
-        var cartBtns = document.querySelectorAll('.btn_addtocart, .btn_add_to_cart');
-        for (var i = 0; i < cartBtns.length; i++) {
-            var cartBtn = cartBtns[i];
-            if (cartBtn.dataset.slsProcessed) continue;
-            if (cartBtn.classList.contains('sls-lua-btn')) continue;
-            var link = cartBtn.querySelector('a');
-            if (!link) continue;
-            var hrefLower = link.href.toLowerCase();
-            if (hrefLower.indexOf('bundle') !== -1 || hrefLower.indexOf('dlc') !== -1) continue;
-            var productID = null;
-            var match = window.location.href.match(/\/(app|sub)\/([0-9]+)/);
-            if (match) {
-                productID = match[2];
-            }
-            if (productID) {
-                cartBtn.dataset.slsProcessed = '1';
-                var luaBtn = cartBtn.cloneNode(true);
-                luaBtn.classList.remove('btn_addtocart');
-                luaBtn.classList.remove('btn_add_to_cart');
-                luaBtn.classList.add('sls-lua-btn');
-                luaBtn.dataset.slsProcessed = '1';
-                luaBtn.dataset.slsAppid = productID;
-                luaBtn.style.display = 'inline-block';
-                luaBtn.style.marginRight = '4px';
-                luaBtn.style.float = 'right';
-                var luaLink = luaBtn.querySelector('a');
-                if (luaLink) {
-                    luaLink.href = 'javascript:void(0)';
-                    luaLink.removeAttribute('id');
+        // Big Picture Mode detection
+        var bpSummary = document.getElementById('summaryBarTop');
+        var bpWrapper = document.getElementById('carouselContainerWrapper');
+        var match = window.location.href.match(/\/(app|sub)\/([0-9]+)/);
+        
+        if (bpSummary && bpWrapper && match) {
+            var productID = match[2];
+            if (!document.getElementById('sls-bp-lua-btn-container-' + productID)) {
+                var bpContainer = document.createElement('div');
+                bpContainer.id = 'sls-bp-lua-btn-container-' + productID;
+                bpContainer.style.cssText = 'display: flex; justify-content: center; z-index: 100; position: relative; margin: 12px 0px 12px 0px; width: 100%; box-sizing: border-box;';
 
-                    // Avoid showing the download action until the installed state is known.
-                    var initialSpan = luaLink.querySelector('span');
-                    if (initialSpan) initialSpan.innerText = 'Checking Lua...';
-                    luaLink.style.filter = 'hue-rotate(200deg) brightness(1.0)';
-                    // luaLink.style.pointerEvents = 'none';
-                    
-                    // Allow clicking even while checking
-                    luaLink.onclick = function(e) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        luaBtn.dataset.slsAppid = productID;
-                        ping('Lua Click (early): ' + productID);
-                        openLuaProviderConfig(productID);
-                    };
+                var bpBtn = document.createElement('button');
+                bpBtn.id = 'sls-bp-lua-btn-' + productID;
+                bpBtn.className = 'Focusable sls-lua-btn';
+                bpBtn.dataset.slsProcessed = '1';
+                bpBtn.dataset.slsAppid = productID;
+                bpBtn.style.cssText = 'background: linear-gradient(135deg, #1a9fff 0%, #0073d4 100%); border: none; color: white; padding: 12px 30px; font-size: 18px; font-weight: bold; border-radius: 6px; cursor: pointer; box-shadow: 0 4px 15px rgba(0,0,0,0.4); text-transform: uppercase; transition: all 0.2s; width: 100%; display: flex; justify-content: center; box-sizing: border-box;';
+                
+                var bpLink = document.createElement('a');
+                bpLink.style.display = 'block';
+                bpLink.style.color = 'white';
+                bpLink.style.textDecoration = 'none';
 
-                    // Check unlock status via callback server
-                    if (appUnlockStatus[productID] !== undefined) {
-                        var cached = appUnlockStatus[productID];
-                        if (cached && (cached.exists || cached.pending)) {
-                            setupRemoveButton(luaLink, luaBtn, productID, cartBtn);
-                        } else {
-                            setupDownloadButton(luaLink, luaBtn, productID, cartBtn);
-                        }
+                var bpSpan = document.createElement('span');
+                bpSpan.innerText = 'Checking Lua...';
+                
+                bpLink.appendChild(bpSpan);
+                bpBtn.appendChild(bpLink);
+                bpContainer.appendChild(bpBtn);
+                
+                bpSummary.parentNode.insertBefore(bpContainer, bpSummary);
+                
+                bpLink.onclick = function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    ping('Lua Click (early): ' + productID);
+                    openLuaProviderConfig(productID);
+                };
+
+                // Check unlock status via callback server
+                if (appUnlockStatus[productID] !== undefined) {
+                    var cached = appUnlockStatus[productID];
+                    if (cached && (cached.exists || cached.pending)) {
+                        setupRemoveButton(bpLink, bpBtn, productID, null);
                     } else {
-                        // Query the server with a short timeout
-                        (function(ll, lb, pid, cb) {
-                            var controller = new AbortController();
-                            var timeoutId = setTimeout(function() { controller.abort(); }, 1000);
-                            fetch('http://127.0.0.1:9001/check?id=' + pid, { signal: controller.signal })
-                                .then(function(r) { clearTimeout(timeoutId); return r.json(); })
-                                .then(function(data) {
-                                    appUnlockStatus[pid] = data;
-                                    var isUnlocked = data.exists || data.pending;
-                                    if (isUnlocked) {
-                                        setupRemoveButton(ll, lb, pid, cb);
-                                    } else {
-                                        setupDownloadButton(ll, lb, pid, cb);
-                                    }
-                                })
-                                .catch(function() {
-                                    clearTimeout(timeoutId);
-                                    ping('Check failed for ' + pid + ', defaulting to Download');
-                                    setupDownloadButton(ll, lb, pid, cb);
-                                });
-                        })(luaLink, luaBtn, productID, cartBtn);
+                        setupDownloadButton(bpLink, bpBtn, productID, null);
                     }
-                }
-                var header = document.querySelector('div.apphub_HeaderStandardTop') ||
-                    document.querySelector('.apphub_HeaderStandardTop');
-                if (header) {
-                    var appName = null;
-                    for (var childIndex = 0; childIndex < header.children.length; childIndex++) {
-                        if (header.children[childIndex].classList.contains('apphub_AppName')) {
-                            appName = header.children[childIndex];
-                            break;
-                        }
-                    }
-                    var insertionPoint = appName || header.firstChild;
-                    header.insertBefore(luaBtn, insertionPoint);
                 } else {
-                    cartBtn.parentNode.insertBefore(luaBtn, cartBtn.nextSibling);
+                    (function(ll, lb, pid) {
+                        var controller = new AbortController();
+                        var timeoutId = setTimeout(function() { controller.abort(); }, 1000);
+                        fetch('http://127.0.0.1:9001/check?id=' + pid, { signal: controller.signal })
+                            .then(function(r) { clearTimeout(timeoutId); return r.json(); })
+                            .then(function(data) {
+                                appUnlockStatus[pid] = data;
+                                var isUnlocked = data.exists || data.pending;
+                                if (isUnlocked) {
+                                    setupRemoveButton(ll, lb, pid, null);
+                                } else {
+                                    setupDownloadButton(ll, lb, pid, null);
+                                }
+                            })
+                            .catch(function() {
+                                clearTimeout(timeoutId);
+                                ping('Check failed for ' + pid + ', defaulting to Download');
+                                setupDownloadButton(ll, lb, pid, null);
+                            });
+                    })(bpLink, bpBtn, productID);
                 }
+
+                // Register for gamepad navigation
+                setTimeout(function() {
+                    registerSteamFocusNode(bpBtn);
+                    bpBtn.addEventListener('vgp_onfocus', function() {
+                        bpBtn.style.outline = '4px solid #fff';
+                        bpBtn.style.outlineOffset = '2px';
+                        bpBtn.style.transform = 'scale(1.05)';
+                    });
+                    bpBtn.addEventListener('vgp_onblur', function() {
+                        bpBtn.style.outline = 'none';
+                        bpBtn.style.transform = 'scale(1)';
+                    });
+                    bpBtn.addEventListener('vgp_onok', function(e) {
+                        e.preventDefault(); e.stopPropagation();
+                        bpLink.click();
+                    });
+                }, 100);
+            }
+        }
+
+        var isBigPicture = document.getElementById('summaryBarTop') || document.getElementById('carouselContainerWrapper') || document.querySelector('.gamepadui') || (document.body && document.body.classList.contains('gamepadui'));
+        if (isBigPicture) {
+            var rogueDesktopBtn = document.querySelector('.btn_addtocart.sls-lua-btn');
+            if (rogueDesktopBtn) rogueDesktopBtn.remove();
+        }
+        var desktopMatch = window.location.href.match(/\/(app|sub)\/([0-9]+)/);
+        if (!isBigPicture && desktopMatch && !document.querySelector('.sls-lua-btn[data-sls-appid="' + desktopMatch[2] + '"]')) {
+            var productID = desktopMatch[2];
+            var cartBtn = null;
+            var cartBtns = document.querySelectorAll('.btn_addtocart, .btn_add_to_cart');
+            for (var i = 0; i < cartBtns.length; i++) {
+                var c = cartBtns[i];
+                var link = c.querySelector('a');
+                if (!link) continue;
+                var hrefLower = link.href.toLowerCase();
+                if (hrefLower.indexOf('bundle') !== -1 || hrefLower.indexOf('dlc') !== -1) continue;
+                cartBtn = c;
                 break;
             }
+
+            var luaBtn;
+            if (cartBtn) {
+                cartBtn.dataset.slsProcessed = '1';
+            }
+            luaBtn = document.createElement('div');
+            luaBtn.className = 'btn_addtocart';
+            luaBtn.innerHTML = '<a class="btn_green_steamui btn_medium" href="javascript:void(0)"><span>Checking Lua...</span></a>';
+
+            luaBtn.classList.add('sls-lua-btn');
+            luaBtn.dataset.slsProcessed = '1';
+            luaBtn.dataset.slsAppid = productID;
+            luaBtn.style.display = 'inline-block';
+            luaBtn.style.marginRight = '4px';
+            luaBtn.style.float = 'right';
+            
+            var luaLink = luaBtn.querySelector('a');
+            if (luaLink) {
+                luaLink.href = 'javascript:void(0)';
+                luaLink.removeAttribute('id');
+
+                // Avoid showing the download action until the installed state is known.
+                var initialSpan = luaLink.querySelector('span');
+                if (initialSpan) initialSpan.innerText = 'Checking Lua...';
+                luaLink.style.filter = 'hue-rotate(200deg) brightness(1.0)';
+                
+                // Allow clicking even while checking
+                luaLink.onclick = function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    luaBtn.dataset.slsAppid = productID;
+                    ping('Lua Click (early): ' + productID);
+                    openLuaProviderConfig(productID);
+                };
+
+                // Check unlock status via callback server
+                if (appUnlockStatus[productID] !== undefined) {
+                    var cached = appUnlockStatus[productID];
+                    if (cached && (cached.exists || cached.pending)) {
+                        setupRemoveButton(luaLink, luaBtn, productID, cartBtn);
+                    } else {
+                        setupDownloadButton(luaLink, luaBtn, productID, cartBtn);
+                    }
+                } else {
+                    // Query the server with a short timeout
+                    (function(ll, lb, pid, cb) {
+                        var controller = new AbortController();
+                        var timeoutId = setTimeout(function() { controller.abort(); }, 1000);
+                        fetch('http://127.0.0.1:9001/check?id=' + pid, { signal: controller.signal })
+                            .then(function(r) { clearTimeout(timeoutId); return r.json(); })
+                            .then(function(data) {
+                                appUnlockStatus[pid] = data;
+                                var isUnlocked = data.exists || data.pending;
+                                if (isUnlocked) {
+                                    setupRemoveButton(ll, lb, pid, cb);
+                                } else {
+                                    setupDownloadButton(ll, lb, pid, cb);
+                                }
+                            })
+                            .catch(function() {
+                                clearTimeout(timeoutId);
+                                ping('Check failed for ' + pid + ', defaulting to Download');
+                                setupDownloadButton(ll, lb, pid, cb);
+                            });
+                    })(luaLink, luaBtn, productID, cartBtn);
+                }
+            }
+
+            var header = document.querySelector('div.apphub_HeaderStandardTop') || document.querySelector('.apphub_HeaderStandardTop');
+            if (header && header.offsetParent !== null) {
+                var appName = null;
+                for (var childIndex = 0; childIndex < header.children.length; childIndex++) {
+                    if (header.children[childIndex].classList.contains('apphub_AppName')) {
+                        appName = header.children[childIndex];
+                        break;
+                    }
+                }
+                var insertionPoint = appName || header.firstChild;
+                header.insertBefore(luaBtn, insertionPoint);
+            } else {
+                var purchaseArea = document.getElementById('game_area_purchase') || document.querySelector('.game_area_purchase') || document.querySelector('.game_area_comingsoon') || document.querySelector('.game_bg') || document.querySelector('.rightcol');
+                if (purchaseArea) {
+                    luaBtn.style.float = 'none';
+                    luaBtn.style.marginBottom = '15px';
+                    purchaseArea.prepend(luaBtn);
+                }
+            }
+
+            // Register for gamepad navigation
+            setTimeout(function() {
+                registerSteamFocusNode(luaBtn);
+                luaBtn.addEventListener('vgp_onfocus', function() {
+                    luaBtn.style.outline = '3px solid #fff';
+                    luaBtn.style.outlineOffset = '2px';
+                });
+                luaBtn.addEventListener('vgp_onblur', function() {
+                    luaBtn.style.outline = 'none';
+                });
+                luaBtn.addEventListener('vgp_onok', function(e) {
+                    e.preventDefault(); e.stopPropagation();
+                    var link = luaBtn.querySelector('a');
+                    if (link) link.click();
+                });
+            }, 100);
         }
 
         // Auto-resume download tracking if there is an active session for this product
@@ -884,7 +1175,7 @@
             }
         }
 
-        if (observer && document.body) observer.observe(document.body, { childList: true, subtree: true });
+        if (observer && document.documentElement) observer.observe(document.documentElement, { childList: true, subtree: true });
     }
 
     function debouncedAddButtons() {
@@ -897,5 +1188,5 @@
 
     addButtons();
     observer = new MutationObserver(debouncedAddButtons);
-    if (document.body) observer.observe(document.body, { childList: true, subtree: true });
+    if (document.documentElement) observer.observe(document.documentElement, { childList: true, subtree: true });
 })();

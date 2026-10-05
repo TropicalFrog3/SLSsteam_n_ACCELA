@@ -130,7 +130,11 @@ void CLog::__log(const unsigned int flags, const char* file, const char* functio
 		return;
 	}
 
-	const size_t size = vsnprintf(nullptr, 0, msg, vArgs) + 1; //Allocate one more byte for zero termination
+	va_list vArgsCopy;
+	va_copy(vArgsCopy, vArgs);
+	const size_t size = vsnprintf(nullptr, 0, msg, vArgsCopy) + 1; //Allocate one more byte for zero termination
+	va_end(vArgsCopy);
+	
 	std::string formatted;
 	formatted.resize(size);
 	vsnprintf(formatted.data(), size, msg, vArgs);

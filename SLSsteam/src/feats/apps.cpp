@@ -3,6 +3,7 @@
 #include "../config.hpp"
 #include "../globals.hpp"
 #include "../utils.hpp"
+#include "../atomic_file.hpp"
 
 #include "fakeappid.hpp"
 
@@ -42,36 +43,38 @@ static void saveAppsJson()
     auto path = getAppsJsonPath();
     if (path.empty()) return;
 
-    std::ofstream file(path, std::ios::trunc);
-    file << "{\n";
-    file << "  \"installed\": [";
+    std::ostringstream ss;
+    ss << "{\n";
+    ss << "  \"installed\": [";
     bool first = true;
     for (auto id : Apps::installedApps)
     {
-        if (!first) file << ", ";
-        file << id;
+        if (!first) ss << ", ";
+        ss << id;
         first = false;
     }
-    file << "],\n";
-    file << "  \"onlinefix\": [";
+    ss << "],\n";
+    ss << "  \"onlinefix\": [";
     first = true;
     for (auto id : Apps::onlineFixApps)
     {
-        if (!first) file << ", ";
-        file << id;
+        if (!first) ss << ", ";
+        ss << id;
         first = false;
     }
-    file << "],\n";
-    file << "  \"autocrack\": [";
+    ss << "],\n";
+    ss << "  \"autocrack\": [";
     first = true;
     for (auto id : Apps::autoCrackApps)
     {
-        if (!first) file << ", ";
-        file << id;
+        if (!first) ss << ", ";
+        ss << id;
         first = false;
     }
-    file << "]\n";
-    file << "}\n";
+    ss << "]\n";
+    ss << "}\n";
+
+    AtomicFile::write(path.string(), ss.str());
 }
 
 static void parseJsonArray(const std::string& content, const std::string& key, std::set<uint32_t>& target)

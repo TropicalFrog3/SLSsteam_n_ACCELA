@@ -2,6 +2,7 @@
 #include "../curl.hpp"
 #include "../log.hpp"
 #include "../version.hpp"
+#include "../atomic_file.hpp"
 
 #include <yaml-cpp/yaml.h>
 #include <curl/curl.h>
@@ -78,7 +79,10 @@ namespace AutoUpdate
         CURL* curl = curl_easy_init();
         if (!curl) return false;
 
-        FILE* fp = fopen(destPath.c_str(), "wb");
+        const std::string tmpPath = AtomicFile::makeTempPath(destPath);
+        AtomicFile::TempFileGuard guard(tmpPath);
+
+        FILE* fp = fopen(tmpPath.c_str(), "wb");
         if (!fp)
         {
             curl_easy_cleanup(curl);
@@ -102,7 +106,6 @@ namespace AutoUpdate
 
         if (res != CURLE_OK)
         {
-            std::filesystem::remove(destPath);
             curl_easy_cleanup(curl);
             return false;
         }
@@ -111,7 +114,19 @@ namespace AutoUpdate
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
         curl_easy_cleanup(curl);
 
-        return httpCode == 200;
+        if (httpCode == 200)
+        {
+            std::error_code ec;
+            fs::rename(tmpPath, destPath, ec);
+            if (ec)
+            {
+                fs::copy_file(tmpPath, destPath, fs::copy_options::overwrite_existing, ec);
+            }
+            guard.dismiss();
+            return true;
+        }
+
+        return false;
     }
 
     static std::vector<int> parseVersionNumbers(const std::string& versionStr)
@@ -514,15 +529,7 @@ namespace AutoUpdate
         sendNotification("SLSsteam", "Update verified! Applying update, please wait...");
 
         std::string scriptPath = stagingDir + "/updater.sh";
-        {
-            std::ofstream script(scriptPath);
-            if (!script.is_open())
-            {
-                LOG_WARN("AutoUpdate: Failed to create updater script at %s\n", scriptPath.c_str());
-                sendNotification("SLSsteam", "Update failed: Could not create updater script.", "critical");
-                std::filesystem::remove_all(stagingDir, ec);
-                return;
-            }
+        std::ostringstream script;
 
             script << "#!/bin/bash\n";
             script << "set -u\n\n";
@@ -649,10 +656,17 @@ namespace AutoUpdate
             script << "fi\n\n";
 
             script << "rm -f \"$0\" 2>/dev/null || true\n";
-        }
 
-        // Set executable permissions
-        chmod(scriptPath.c_str(), 0755);
+            if (!AtomicFile::write(scriptPath, script.str()))
+            {
+                LOG_WARN("AutoUpdate: Failed to atomically write updater script at %s\n", scriptPath.c_str());
+                sendNotification("SLSsteam", "Update failed: Could not create updater script.", "critical");
+                std::filesystem::remove_all(stagingDir, ec);
+                return;
+            }
+
+            // Set executable permissions
+            chmod(scriptPath.c_str(), 0755);
 
         pid_t scriptPid = fork();
         if (scriptPid == 0)

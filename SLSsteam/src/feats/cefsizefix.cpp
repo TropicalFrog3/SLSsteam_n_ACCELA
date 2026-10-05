@@ -2,6 +2,7 @@
 
 #include "../config.hpp"
 #include "../log.hpp"
+#include "../atomic_file.hpp"
 
 #include <cstdlib>
 #include <filesystem>
@@ -261,16 +262,12 @@ bool CefSizeFix::injectSizeFixScript()
 
     content.insert(headEnd, injection);
 
-    // Write back
-    std::ofstream outFile(indexPath, std::ios::trunc);
-    if (!outFile.is_open())
+    // Atomically write back to index.html
+    if (!AtomicFile::write(indexPath.string(), content))
     {
-        LOG_WARN("CefSizeFix: Could not open %s for writing\n", indexPath.string().c_str());
+        LOG_WARN("CefSizeFix: Could not atomically write %s\n", indexPath.string().c_str());
         return false;
     }
-
-    outFile << content;
-    outFile.close();
 
     LOG_INFO("CefSizeFix: Successfully injected size fix script into index.html\n");
     return true;
@@ -305,11 +302,8 @@ void CefSizeFix::removeSizeFixScript()
 
     content.erase(beginPos, removeEnd - beginPos);
 
-    std::ofstream outFile(indexPath, std::ios::trunc);
-    if (!outFile.is_open()) return;
-
-    outFile << content;
-    outFile.close();
-
-    LOG_INFO("CefSizeFix: Removed injected script from index.html\n");
+    if (AtomicFile::write(indexPath.string(), content))
+    {
+        LOG_INFO("CefSizeFix: Removed injected script from index.html\n");
+    }
 }

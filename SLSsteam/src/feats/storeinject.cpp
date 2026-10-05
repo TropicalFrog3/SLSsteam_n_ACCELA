@@ -10,6 +10,7 @@
 #include "../log.hpp"
 #include "../config.hpp"
 #include "../utils.hpp"
+#include "../atomic_file.hpp"
 
 #include <thread>
 #include <atomic>
@@ -21,6 +22,7 @@
 #include <regex>
 #include <fstream>
 #include <cctype>
+#include <set>
 #include <base64/base64.hpp>
 
 
@@ -334,12 +336,9 @@ namespace StoreInject
             
             if (ext == ".zip") {
                 std::string zipPath = "/tmp/sls_manual_" + appId + ".zip";
-                std::ofstream zf(zipPath, std::ios::binary | std::ios::trunc);
-                if (!zf) {
+                if (!AtomicFile::write(zipPath, decodedData, true)) {
                     return "{\"success\":false,\"message\":\"Failed to create temporary zip file.\"}";
                 }
-                zf.write(decodedData.data(), decodedData.size());
-                zf.close();
 
                 bool validZip = false;
                 if (decodedData.size() >= 4) {
@@ -390,10 +389,9 @@ namespace StoreInject
 
                 for (const auto& mf : zipManifestFiles) {
                     std::string dest = (depotcache / std::filesystem::path(mf).filename()).string();
-                    try {
-                        std::filesystem::copy_file(mf, dest, std::filesystem::copy_options::overwrite_existing);
+                    if (AtomicFile::copy(mf, dest)) {
                         manifestCount++;
-                    } catch (...) {}
+                    }
                 }
 
                 if (!zipLuaFiles.empty()) {
@@ -409,20 +407,16 @@ namespace StoreInject
                         selectedLua = zipLuaFiles[0];
                     }
                     std::string dest = (stplugin / (appId + ".lua")).string();
-                    try {
-                        std::filesystem::copy_file(selectedLua, dest, std::filesystem::copy_options::overwrite_existing);
+                    if (AtomicFile::copy(selectedLua, dest)) {
                         luaCount++;
-                    } catch (...) {}
+                    }
                 }
 
                 std::filesystem::remove_all(extractDir);
             }
             else if (ext == ".manifest") {
                 std::string dest = (depotcache / std::filesystem::path(file.name).filename()).string();
-                std::ofstream f(dest, std::ios::binary | std::ios::trunc);
-                if (f) {
-                    f.write(decodedData.data(), decodedData.size());
-                    f.close();
+                if (AtomicFile::write(dest, decodedData, true)) {
                     manifestCount++;
                 }
             }
@@ -434,15 +428,9 @@ namespace StoreInject
                 } else {
                     destPath = stplugin / file.name;
                 }
-                try {
-                    std::filesystem::create_directories(destPath.parent_path());
-                    std::ofstream f(destPath, std::ios::binary | std::ios::trunc);
-                    if (f) {
-                        f.write(decodedData.data(), decodedData.size());
-                        f.close();
-                        luaCount++;
-                    }
-                } catch (...) {}
+                if (AtomicFile::write(destPath.string(), decodedData, true)) {
+                    luaCount++;
+                }
             }
         }
 
@@ -1221,6 +1209,75 @@ namespace StoreInject
                                 close(new_socket);
                             }
                         }
+                        else if (request.find("/active-downloads") != std::string::npos)
+                        {
+                            try {
+                                auto pendingIds = CppAccela::Download::getPendingAppIds();
+                                std::set<uint32_t> activeAppIds(pendingIds.begin(), pendingIds.end());
+
+                                const char* tmpDir = getenv("TMPDIR");
+                                std::string tmpBase = tmpDir ? tmpDir : "/tmp";
+                                std::error_code ec;
+                                for (const auto& entry : std::filesystem::directory_iterator(tmpBase, ec))
+                                {
+                                    if (ec) break;
+                                    const std::string filename = entry.path().filename().string();
+                                    if (filename.rfind("sls_dl_", 0) == 0 && filename.size() > 12 && filename.substr(filename.size() - 5) == ".json")
+                                    {
+                                        std::string idPart = filename.substr(7, filename.size() - 12);
+                                        try {
+                                            uint32_t id = std::stoul(idPart);
+                                            activeAppIds.insert(id);
+                                        } catch (...) {}
+                                    }
+                                }
+
+                                std::string json = "[";
+                                bool first = true;
+                                for (uint32_t appId : activeAppIds)
+                                {
+                                    std::string idStr = std::to_string(appId);
+                                    std::string path = tmpBase + "/sls_dl_" + idStr + ".json";
+                                    std::ifstream f(path);
+                                    if (!f.is_open()) continue;
+
+                                    std::ostringstream ss;
+                                    ss << f.rdbuf();
+                                    std::string content = ss.str();
+                                    while (!content.empty() && (content.back() == '\n' || content.back() == '\r'))
+                                        content.pop_back();
+
+                                    if (content.empty()) continue;
+
+                                    if (content.find("\"phase\":\"done\"") != std::string::npos ||
+                                        content.find("\"phase\":\"failed\"") != std::string::npos ||
+                                        content.find("\"phase\":\"idle\"") != std::string::npos)
+                                    {
+                                        continue;
+                                    }
+
+                                    bool paused = CppAccela::Download::isPaused(appId);
+
+                                    if (content.front() == '{')
+                                    {
+                                        content.insert(1, "\"appId\":" + idStr + ",\"paused\":" + (paused ? "true" : "false") + ",");
+                                    }
+
+                                    if (!first) json += ",";
+                                    json += content;
+                                    first = false;
+                                }
+                                json += "]";
+
+                                std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: " + std::to_string(json.size()) + "\r\n\r\n" + json;
+                                send(new_socket, response.c_str(), response.size(), 0);
+                                close(new_socket);
+                                handled = true;
+                            } catch (...) {
+                                handled = false;
+                                close(new_socket);
+                            }
+                        }
                         else if (request.find("/verify-files?id=") != std::string::npos)
                         {
                             try {
@@ -1517,6 +1574,9 @@ namespace StoreInject
                         else if (request.find("/restart") != std::string::npos)
                         {
                             LOG_INFO("Restart Steam requested via UI\n");
+
+                            // Terminate any active downloads cleanly before restart
+                            CppAccela::Download::shutdown();
                             
                             // Send response first
                             const char* response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n";
@@ -1567,6 +1627,8 @@ namespace StoreInject
                                 "pkill -9 -x steam 2>/dev/null; "
                                 "pkill -9 -x steamwebhelper 2>/dev/null; "
                                 "sleep 1; "
+                                // Step 4.5: Clean up stale PID and lock files left by SIGKILL
+                                "rm -f ~/.steam/steam.pid ~/.steam/.steam/steam.pid ~/.steam/steam.pipe ~/.local/share/Steam/steam.pid ~/.local/share/Steam/steam.pipe 2>/dev/null; "
                                 // Step 5: Relaunch with LD_AUDIT (CDP pipe injection handled by tier0 hook)
                                 "env";
                             if (!ldAuditStr.empty()) {
@@ -1705,10 +1767,8 @@ namespace StoreInject
 
         content.erase(beginPos, removeEnd - beginPos);
 
-        std::ofstream outFile(indexPath, std::ios::trunc);
-        if (outFile.is_open())
+        if (AtomicFile::write(indexPath.string(), content))
         {
-            outFile << content;
             LOG_INFO("StoreInject: Removed injected script from index.html\n");
         }
     }

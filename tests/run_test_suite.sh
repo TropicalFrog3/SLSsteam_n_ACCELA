@@ -39,7 +39,7 @@ export SLS_UNINSTALL_AUTO_ACCEPT=1
 
 step "Test Case 1 & 2: Config Migration and Cache Migration Unit Tests"
 echo "Building and running unit tests with test_migration..."
-make -C "$REPO_ROOT/SLSsteam" audit-libs -j"$(nproc)" >/dev/null
+make -C "$REPO_ROOT/SLSsteam" audit-libs -j"$(nproc)" >/dev/null 2>&1 || "$REPO_ROOT/SLSsteam/docker/build.sh" >/dev/null
 
 g++ -m32 -std=c++20 -D_GLIBCXX_USE_CXX11_ABI=0 -fuse-ld=gold -isystem"$REPO_ROOT/SLSsteam/include" \
     "$REPO_ROOT/SLSsteam/tests/test_migration.cpp" \
@@ -55,14 +55,19 @@ step "Test Case 3: Auto-Updater Up-to-Date Scenario (Faked Local URL)"
 SANDBOX_HOME="$TEST_TMP/fake_home"
 mkdir -p "$SANDBOX_HOME/.local/share/SLSsteam" "$SANDBOX_HOME/.config/SLSsteam"
 
-# Compile test_autoupdate harness
-g++ -m32 -std=c++20 -D_GLIBCXX_USE_CXX11_ABI=0 -fuse-ld=gold -isystem"$REPO_ROOT/SLSsteam/include" \
+# Compile test_autoupdate harness (host or docker)
+if ! g++ -m32 -std=c++20 -D_GLIBCXX_USE_CXX11_ABI=0 -fuse-ld=gold -isystem"$REPO_ROOT/SLSsteam/include" \
     "$REPO_ROOT/SLSsteam/tests/test_autoupdate.cpp" \
     "$REPO_ROOT/SLSsteam/src/feats/autoupdate.cpp" \
     "$REPO_ROOT/SLSsteam/src/curl.cpp" \
     "$REPO_ROOT/SLSsteam/lib/libyaml-cpp.a" \
     -lssl -lcrypto -lcurl \
-    -o "$REPO_ROOT/SLSsteam/bin/test_autoupdate"
+    -o "$REPO_ROOT/SLSsteam/bin/test_autoupdate" 2>/dev/null; then
+    docker run --rm --mount=type=bind,source="$REPO_ROOT/SLSsteam",target=/src --workdir=/src sls-host:latest \
+        g++ -m32 -std=c++20 -D_GLIBCXX_USE_CXX11_ABI=0 -fuse-ld=gold -isysteminclude \
+        tests/test_autoupdate.cpp src/feats/autoupdate.cpp src/curl.cpp lib/libyaml-cpp.a \
+        -lssl -lcrypto -lcurl -o bin/test_autoupdate
+fi
 
 MOCK_VER_FILE="$TEST_TMP/version_uptodate.yaml"
 cat << 'EOF' > "$MOCK_VER_FILE"
@@ -395,6 +400,12 @@ echo "Running uninstall.sh again to verify idempotency..."
 HOME="$UNINSTALL_HOME" SLS_UNINSTALL_REMOVE_CONFIGS=1 "$REPO_ROOT/uninstall.sh"
 pass "Uninstaller is completely idempotent."
 
+step "Test Case 8: Atomic Staging, Directory Merging, and Cancellation Recovery"
+echo "Compiling and running test_atomic_staging unit tests..."
+g++ -std=c++20 "$REPO_ROOT/SLSsteam/tests/test_atomic_staging.cpp" -o "$REPO_ROOT/SLSsteam/bin/test_atomic_staging"
+"$REPO_ROOT/SLSsteam/bin/test_atomic_staging"
+pass "Atomic staging, merge, and cancellation safety unit tests passed successfully."
+
 step "ALL TEST CASES PASSED SUCCESSFULLY!"
-echo -e "${GREEN}>>> 7 out of 7 Test Cases passed with 0 errors and zero external network calls.${NC}"
+echo -e "${GREEN}>>> All Test Cases passed with 0 errors and zero external network calls.${NC}"
 exit 0

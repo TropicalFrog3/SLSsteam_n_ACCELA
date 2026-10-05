@@ -89,4 +89,7 @@ namespace CppAccela::DepotDownloader
                const std::string& progressPath,
                const std::vector<std::string>& selectedDepots);
 
+    /** Kill any active child process spawned by runAndStream. */
+    void killCurrentChild();
+
 } // namespace CppAccela::DepotDownloader

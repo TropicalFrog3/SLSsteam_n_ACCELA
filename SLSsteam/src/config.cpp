@@ -7,6 +7,7 @@
 #include "filewatcher.hpp"
 #include "log.hpp"
 #include "utils.hpp"
+#include "atomic_file.hpp"
 
 #include "yaml-cpp/yaml.h"
 
@@ -86,15 +87,11 @@ bool CConfig::createFile() const
 			LOG_DEBUG("Created config directory at %s\n", dir.c_str());
 		}
 
-		auto config = std::ofstream(path);
-		if (!config.is_open())
+		if (!AtomicFile::write(path, defaultConfig))
 		{
 			LOG_NOTIFY("Unable to create %s!", path.c_str());
 			return false;
 		}
-
-		config << defaultConfig;
-		config.close();
 	}
 
 	return true;
@@ -612,27 +609,20 @@ bool CConfig::addAdditionalAppId(uint32_t appId)
 	int insertAfter = (lastEntryIdx != -1) ? lastEntryIdx : sectionHeaderIdx;
 	lines.insert(lines.begin() + insertAfter + 1, newEntry);
 
-	// 5. Write atomically: write to temp file, then rename
-	std::string tmpPath = configPath + ".tmp";
-	std::ofstream outFile(tmpPath);
-	if (!outFile.is_open())
-	{
-		LOG_INFO("addAdditionalAppId: Cannot write temp file at %s\n", tmpPath.c_str());
-		return false;
-	}
+	// 5. Write atomically using AtomicFile::writeStream
+	bool written = AtomicFile::writeStream(configPath, [&](std::ostream& outFile) {
+		for (size_t i = 0; i < lines.size(); ++i)
+		{
+			outFile << lines[i];
+			if (i + 1 < lines.size())
+				outFile << '\n';
+		}
+		return true;
+	});
 
-	for (size_t i = 0; i < lines.size(); ++i)
+	if (!written)
 	{
-		outFile << lines[i];
-		if (i + 1 < lines.size())
-			outFile << '\n';
-	}
-	outFile.close();
-
-	if (std::rename(tmpPath.c_str(), configPath.c_str()) != 0)
-	{
-		LOG_INFO("addAdditionalAppId: Failed to rename temp file to %s\n", configPath.c_str());
-		std::remove(tmpPath.c_str());
+		LOG_INFO("addAdditionalAppId: Failed to atomically write %s\n", configPath.c_str());
 		return false;
 	}
 
@@ -727,27 +717,20 @@ bool CConfig::removeAdditionalAppId(uint32_t appId)
 		return false;
 	}
 
-	// 3. Write atomically
-	std::string tmpPath = configPath + ".tmp";
-	std::ofstream outFile(tmpPath);
-	if (!outFile.is_open())
-	{
-		LOG_INFO("removeAdditionalAppId: Cannot write temp file at %s\n", tmpPath.c_str());
-		return false;
-	}
+	// 3. Write atomically using AtomicFile::writeStream
+	bool written = AtomicFile::writeStream(configPath, [&](std::ostream& outFile) {
+		for (size_t i = 0; i < newLines.size(); ++i)
+		{
+			outFile << newLines[i];
+			if (i + 1 < newLines.size())
+				outFile << '\n';
+		}
+		return true;
+	});
 
-	for (size_t i = 0; i < newLines.size(); ++i)
+	if (!written)
 	{
-		outFile << newLines[i];
-		if (i + 1 < newLines.size())
-			outFile << '\n';
-	}
-	outFile.close();
-
-	if (std::rename(tmpPath.c_str(), configPath.c_str()) != 0)
-	{
-		LOG_INFO("removeAdditionalAppId: Failed to rename temp file to %s\n", configPath.c_str());
-		std::remove(tmpPath.c_str());
+		LOG_INFO("removeAdditionalAppId: Failed to atomically write %s\n", configPath.c_str());
 		return false;
 	}
 
@@ -853,21 +836,15 @@ bool CConfig::updateApiAuth(const std::string& newMorrenus, const std::string& n
 	if (!foundHubcap) lines.push_back("HubcapKey: \"" + hubcap + "\"");
 
 
-	std::string tmpPath = configPath + ".tmp";
-	std::ofstream outFile(tmpPath);
-	if (!outFile.is_open()) return false;
+	bool written = AtomicFile::writeStream(configPath, [&](std::ostream& outFile) {
+		for (size_t i = 0; i < lines.size(); ++i)
+		{
+			outFile << lines[i] << '\n';
+		}
+		return true;
+	});
 
-	for (size_t i = 0; i < lines.size(); ++i)
-	{
-		outFile << lines[i] << '\n'; // always emit newline — keeps file well-formed
-	}
-	outFile.close();
-
-	if (std::rename(tmpPath.c_str(), configPath.c_str()) != 0)
-	{
-		std::remove(tmpPath.c_str());
-		return false;
-	}
+	if (!written) return false;
 
 	LOG_INFO("updateApiAuth: Updated API credentials in %s\n", configPath.c_str());
 	return true;

@@ -2,6 +2,7 @@
 
 #include "../config.hpp"
 #include "../globals.hpp"
+#include "../atomic_file.hpp"
 
 #include "fakeappid.hpp"
 
@@ -87,9 +88,7 @@ bool Ticket::saveTicketToCache(const CMsgClientGetAppOwnershipTicketResponse& re
 	node << YAML::EndMap;
 
 	const auto path = Ticket::getTicketPath(appId);
-	std::ofstream ofs(path.c_str(), std::ios::out);
-
-	ofs.write(node.c_str(), node.size());
+	AtomicFile::write(path, std::string_view(node.c_str(), node.size()));
 
 	LOG_ONCE("Saved ticket for %u\n", appId);
 
@@ -204,9 +203,7 @@ bool Ticket::saveEncryptedTicketToCache(const CMsgClientRequestEncryptedAppTicke
 	node << YAML::EndMap;
 
 	const auto path = getEncryptedTicketPath(appId);
-	std::ofstream ofs(path.c_str(), std::ios::out);
-
-	ofs.write(node.c_str(), node.size());
+	AtomicFile::write(path, std::string_view(node.c_str(), node.size()));
 
 	LOG_ONCE("Saved encrypted ticket for %u\n", appId);
 

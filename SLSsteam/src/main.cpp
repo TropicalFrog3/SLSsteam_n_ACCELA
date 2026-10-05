@@ -16,6 +16,7 @@
 #include "feats/removelua.hpp"
 #include "feats/tier0hook.hpp"
 #include "feats/autoupdate.hpp"
+#include "CppAccela/acceladownload.hpp"
 #include "vftableinfo.hpp"
 
 #include "libmem/libmem.h"
@@ -78,6 +79,7 @@ static bool cleanEnvVar(const char* varName, const char* endsWith)
 //__attribute__((noreturn))
 static void unload()
 {
+	CppAccela::Download::shutdown();
 	Tier0Hook::remove();
 	CefSizeFix::removeSizeFixScript();
 	StoreInject::shutdown();
@@ -186,6 +188,7 @@ static void setup()
 
 	Updater::init();
 	AutoUpdate::checkAndPrompt();
+	CppAccela::Download::purgeStaleDownloads();
 
 	setupSuccess = true;
 }

@@ -8,6 +8,90 @@
         fetch('http://127.0.0.1:9001/log?msg=' + encodeURIComponent('[RemoveLua] ' + m)).catch(function(){});
     }
 
+    function registerSteamFocusNode(element, properties) {
+        if (!properties) properties = { focusable: true };
+        if (!element.hasAttribute('tabindex')) element.setAttribute('tabindex', '-1');
+        element.classList.add('Focusable');
+        var parent = element.parentElement;
+        var parentNode = null;
+        while (parent && parent !== document.body) {
+            var fiberKey = Object.keys(parent).find(key => key.startsWith('__reactFiber'));
+            if (fiberKey) {
+                var n = parent[fiberKey];
+                while (n) {
+                    if (n.memoizedProps && n.memoizedProps.node) {
+                        parentNode = n.memoizedProps.node;
+                        break;
+                    }
+                    n = n.return;
+                }
+            }
+            if (parentNode) break;
+            parent = parent.parentElement;
+        }
+        if (!parentNode) return null;
+        try {
+            var NavNodeClass = parentNode.constructor;
+            var newNode = new NavNodeClass(parentNode.m_Tree, parentNode, null);
+            if (newNode.SetProperties) newNode.SetProperties(properties);
+            else newNode.m_Properties = Object.assign(newNode.m_Properties || {}, properties);
+            if (newNode.OnMount) newNode.OnMount(element);
+            return newNode;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function trapSteamGamepadModal(overlay, buttons) {
+        var activeIdx = 0;
+        function updateFocus() {
+            for (var i=0; i<buttons.length; i++) {
+                if (!buttons[i]) continue;
+                if (i === activeIdx) {
+                    buttons[i].style.outline = '3px solid #fff';
+                    buttons[i].style.outlineOffset = '2px';
+                    if (buttons[i].scrollIntoViewIfNeeded) buttons[i].scrollIntoViewIfNeeded();
+                    else buttons[i].scrollIntoView({ block: 'nearest', inline: 'nearest' });
+                } else {
+                    buttons[i].style.outline = 'none';
+                }
+            }
+        }
+        setTimeout(updateFocus, 100);
+        
+        function gamepadCatcher(e) {
+            if (!document.body.contains(overlay)) {
+                window.removeEventListener('vgp_ondirection', gamepadCatcher, true);
+                window.removeEventListener('vgp_onok', okCatcher, true);
+                window.removeEventListener('vgp_oncancel', cancelCatcher, true);
+                return;
+            }
+            e.stopPropagation(); if(e.cancelable) e.preventDefault();
+            var dir = e.detail ? e.detail.button : null;
+            var startIdx = activeIdx;
+            if (dir === 9 || dir === 11) { // Up or Left
+                do { activeIdx = (activeIdx > 0) ? activeIdx - 1 : buttons.length - 1; } while (buttons[activeIdx] && buttons[activeIdx].disabled && activeIdx !== startIdx);
+            } else if (dir === 10 || dir === 12) { // Down or Right
+                do { activeIdx = (activeIdx < buttons.length - 1) ? activeIdx + 1 : 0; } while (buttons[activeIdx] && buttons[activeIdx].disabled && activeIdx !== startIdx);
+            }
+            updateFocus();
+        }
+        function okCatcher(e) {
+            if (!document.body.contains(overlay)) return;
+            e.stopPropagation(); if(e.cancelable) e.preventDefault();
+            if (buttons[activeIdx] && !buttons[activeIdx].disabled) buttons[activeIdx].click();
+        }
+        function cancelCatcher(e) {
+            if (!document.body.contains(overlay)) return;
+            e.stopPropagation(); if(e.cancelable) e.preventDefault();
+            var cancelBtn = overlay.querySelector('#sls-btn-cancel, #sls-prov-cancel, #sls-close-x, #sls-prov-close');
+            if (cancelBtn) cancelBtn.click(); else overlay.remove();
+        }
+        window.addEventListener('vgp_ondirection', gamepadCatcher, true);
+        window.addEventListener('vgp_onok', okCatcher, true);
+        window.addEventListener('vgp_oncancel', cancelCatcher, true);
+    }
+
     function extractAppId(manageBtn) {
         var appid = null;
         var curr = manageBtn;
@@ -111,48 +195,43 @@
         if (document.getElementById('sls-overlay-modal')) return;
         var overlay = document.createElement('div');
         overlay.id = 'sls-overlay-modal';
-        overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(10,12,18,0.85);z-index:999999;display:flex;justify-content:center;align-items:center;backdrop-filter:blur(8px);transition:all 0.3s ease;opacity:0;';
+        overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:999999;display:flex;justify-content:center;align-items:center;backdrop-filter:blur(8px);transition:all 0.3s ease;opacity:0;';
 
-        var cardHtml = '<div style="background: linear-gradient(145deg, #161920 0%, #0d0f14 100%); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 16px; padding: 28px; width: 440px; box-shadow: 0 20px 50px rgba(0,0,0,0.6); font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, Helvetica, Arial, sans-serif; color: #f5f6f8; transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1); transform: scale(0.95); opacity: 0;" id="sls-modal-card">' +
+        var cardHtml = '<div style="background: #1e2024; border: 1px solid #3d4450; border-radius: 4px; padding: 24px; width: 440px; box-shadow: 0 4px 16px rgba(0,0,0,0.5); font-family: \'Motiva Sans\', sans-serif; color: #dcdedf; transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1); transform: scale(0.95); opacity: 0;" id="sls-modal-card">' +
             '<!-- Title bar -->' +
-            '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">' +
+            '<div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:20px;">' +
                 '<div>' +
-                    '<h2 style="margin:0; font-size:22px; font-weight:700; background: linear-gradient(90deg, #fff 0%, #a5aab6 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">SLS Game Manager</h2>' +
-                    '<p style="margin:4px 0 0; font-size:12px; color:#6b7280; font-weight: 500;">AppID: <span style="color:#9ca3af; font-family:monospace;">' + appid + '</span></p>' +
+                    '<h2 style="margin:0; font-size:22px; font-weight:300; color: #fff; text-transform: uppercase; letter-spacing: 1px;">SLS Game Manager</h2>' +
+                    '<p style="margin:4px 0 0; font-size:14px; color:#969696;">AppID: ' + appid + '</p>' +
                 '</div>' +
-                '<button id="sls-close-x" style="background:rgba(255,255,255,0.05); border:none; color:#9ca3af; font-size:20px; cursor:pointer; width:32px; height:32px; border-radius:50%; display:flex; align-items:center; justify-content:center; transition: all 0.2s;">&times;</button>' +
+                '<button id="sls-close-x" class="sls-btn-close Focusable" tabindex="-1" role="button">&times;</button>' +
             '</div>' +
             '<!-- Administrative Tools Section -->' +
             '<div id="sls-content-admin" style="display:block; margin-bottom:24px;">' +
-                '<div style="display:flex; flex-direction:column; gap:12px;">' +
+                '<div style="display:flex; flex-direction:column; gap:8px;">' +
                     '<!-- Verify Files -->' +
-                    '<button id="sls-btn-verify" class="sls-btn-action sls-btn-verify" style="width:100%; box-sizing:border-box;">' +
-                        '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:8px;"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>' +
+                    '<button id="sls-btn-verify" class="sls-btn-action Focusable" tabindex="-1" role="button" style="width:100%;">' +
                         'Verify Files' +
                     '</button>' +
                     '<!-- Online Fix -->' +
-                    '<button id="sls-btn-fix" class="sls-btn-action" style="width:100%; box-sizing:border-box;">Checking Fix status...</button>' +
+                    '<button id="sls-btn-fix" class="sls-btn-action Focusable" tabindex="-1" role="button" style="width:100%;">Checking Fix status...</button>' +
                     '<!-- Auto Crack -->' +
-                    '<button id="sls-btn-crack" class="sls-btn-action" style="width:100%; box-sizing:border-box;">Checking Crack status...</button>' +
+                    '<button id="sls-btn-crack" class="sls-btn-action Focusable" tabindex="-1" role="button" style="width:100%;">Checking Crack status...</button>' +
                 '</div>' +
             '</div>' +
             '<!-- Footer Actions -->' +
-            '<div style="display:flex; justify-content:flex-end; gap:12px;">' +
-                '<button id="sls-btn-cancel" style="background:transparent; border:1px solid rgba(255,255,255,0.1); color:#9ca3af; padding:10px 20px; border-radius:8px; cursor:pointer; font-size:13px; font-weight:600; transition: all 0.2s;">Close</button>' +
+            '<div style="display:flex; justify-content:flex-end; gap:10px;">' +
+                '<button id="sls-btn-cancel" class="sls-btn-action Focusable" tabindex="-1" role="button" style="padding: 0 24px; height: 36px;">Close</button>' +
             '</div>' +
         '</div>';
 
         overlay.innerHTML = cardHtml;
         var style = document.createElement('style');
-        style.textContent = ' .sls-btn-action { display: flex; justify-content: center; align-items: center; border: none; color: #fff; padding: 11px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1); box-shadow: 0 2px 4px rgba(0,0,0,0.15); }' +
-            ' .sls-btn-action:hover { transform: translateY(-1.5px); box-shadow: 0 6px 16px rgba(0,0,0,0.3); filter: brightness(1.15); }' +
-            ' .sls-btn-action:active { transform: translateY(0); }' +
-            ' .sls-btn-verify { background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%); }' +
-            ' .sls-btn-install { background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%); }' +
-            ' .sls-btn-remove { background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); }' +
-            ' .sls-btn-crack-install { background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); }' +
-            ' #sls-close-x:hover { background: rgba(255,255,255,0.1) !important; color: #fff !important; }' +
-            ' #sls-btn-cancel:hover { background: rgba(255,255,255,0.03) !important; color: #fff !important; border-color: rgba(255,255,255,0.2) !important; }';
+        style.textContent = ' .sls-btn-action { display: flex; justify-content: center; align-items: center; background: rgba(172, 178, 201, 0.14); color: rgb(220, 222, 223); border: none; border-radius: 2px; padding: 8px 16px; font-size: 16px; font-weight: 400; font-family: "Motiva Sans", sans-serif; height: 48px; box-sizing: border-box; cursor: pointer; text-decoration: none; transition: background 0.1s ease; }' +
+            ' .sls-btn-action:hover { background: rgba(172, 178, 201, 0.25); }' +
+            ' .sls-btn-action:active { background: rgba(172, 178, 201, 0.30); }' +
+            ' .sls-btn-close { background: transparent; border: none; color: #969696; font-size: 24px; cursor: pointer; width: 32px; height: 32px; border-radius: 2px; display: flex; align-items: center; justify-content: center; transition: background 0.1s ease; }' +
+            ' .sls-btn-close:hover { background: rgba(172, 178, 201, 0.14); color: #fff; }';
 
         overlay.appendChild(style);
         document.body.appendChild(overlay);
@@ -171,6 +250,8 @@
         var crackBtn = document.getElementById('sls-btn-crack');
         var closeX = document.getElementById('sls-close-x');
         var cancelBtn = document.getElementById('sls-btn-cancel');
+
+        trapSteamGamepadModal(overlay, [closeX, verifyBtn, fixBtn, crackBtn, cancelBtn]);
 
         function close() {
             overlay.style.opacity = '0';
@@ -198,10 +279,9 @@
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 function updateFixBtn(installed) {
-                    fixBtn.className = 'sls-btn-action';
+                    fixBtn.className = 'sls-btn-action Focusable';
                     if (installed) {
                         fixBtn.innerText = 'Remove Online-Fix';
-                        fixBtn.classList.add('sls-btn-remove');
                         fixBtn.onclick = function(e) {
                             e.preventDefault(); e.stopPropagation();
                             fixBtn.innerText = 'Removing...';
@@ -211,7 +291,6 @@
                         };
                     } else {
                         fixBtn.innerText = 'Install Online-Fix';
-                        fixBtn.classList.add('sls-btn-install');
                         fixBtn.onclick = function(e) {
                             e.preventDefault(); e.stopPropagation();
                             fixBtn.innerText = 'Installing...';
@@ -224,10 +303,9 @@
                 updateFixBtn(data.onlineFixInstalled);
 
                 function updateCrackBtn(installed) {
-                    crackBtn.className = 'sls-btn-action';
+                    crackBtn.className = 'sls-btn-action Focusable';
                     if (installed) {
                         crackBtn.innerText = 'Remove AutoCrack';
-                        crackBtn.classList.add('sls-btn-remove');
                         crackBtn.onclick = function(e) {
                             e.preventDefault(); e.stopPropagation();
                             crackBtn.innerText = 'Removing...';
@@ -237,7 +315,6 @@
                         };
                     } else {
                         crackBtn.innerText = 'Install AutoCrack';
-                        crackBtn.classList.add('sls-btn-crack-install');
                         crackBtn.onclick = function(e) {
                             e.preventDefault(); e.stopPropagation();
                             crackBtn.innerText = 'Installing...';
@@ -269,42 +346,44 @@
         if (document.getElementById('sls-provider-modal')) return;
         var overlay = document.createElement('div');
         overlay.id = 'sls-provider-modal';
-        overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(10,12,18,0.85);z-index:999999;display:flex;justify-content:center;align-items:center;backdrop-filter:blur(8px);transition:all 0.3s ease;opacity:0;';
+        overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:999999;display:flex;justify-content:center;align-items:center;backdrop-filter:blur(8px);transition:all 0.3s ease;opacity:0;';
 
         var rows = '';
         for (var i = 0; i < luaProviders.length; i++) {
             var isCurrent = currentProvider && currentProvider.toLowerCase().indexOf(luaProviders[i].name.toLowerCase()) !== -1;
-            var badgeHtml = isCurrent ? '<span style="margin-left:8px;font-size:10px;padding:2px 8px;background:rgba(99,102,241,0.25);border:1px solid rgba(99,102,241,0.4);border-radius:4px;color:#a5b4fc;">Current</span>' : '';
+            var badgeHtml = isCurrent ? '<span style="margin-left:8px;font-size:12px;padding:2px 6px;background:rgba(172,178,201,0.2);border-radius:2px;color:#dcdedf;">Current</span>' : '';
             var btnStyle = isCurrent
-                ? 'background:rgba(99,102,241,0.15);border:1px solid rgba(99,102,241,0.3);color:#a5b4fc;cursor:default;opacity:0.6;'
-                : 'background:linear-gradient(135deg,#0ea5e9 0%,#0284c7 100%);border:none;color:#fff;cursor:pointer;';
-            rows += '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;margin-bottom:6px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:8px;">' +
-                '<span style="flex:1;color:#f5f6f8;font-size:13px;font-weight:600;">' + luaProviders[i].name + badgeHtml + '</span>' +
-                '<button data-sls-provider-idx="' + i + '" ' + (isCurrent ? 'disabled ' : '') + 'style="' + btnStyle + 'padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;transition:all 0.2s;">' + (isCurrent ? 'Active' : 'Use') + '</button>' +
+                ? 'background:rgba(172,178,201,0.05);color:#969696;cursor:default;opacity:0.6;'
+                : '';
+            rows += '<div style="display:flex;align-items:center;justify-content:space-between;padding:12px 14px;margin-bottom:6px;background:rgba(0,0,0,0.2);border:1px solid rgba(172,178,201,0.1);border-radius:2px;">' +
+                '<span style="flex:1;color:#dcdedf;font-size:16px;font-weight:400;font-family:\'Motiva Sans\', sans-serif;">' + luaProviders[i].name + badgeHtml + '</span>' +
+                '<button data-sls-provider-idx="' + i + '" class="sls-btn-action Focusable" tabindex="-1" role="button" ' + (isCurrent ? 'disabled ' : '') + 'style="height: 36px; padding: 0 16px; ' + btnStyle + '">' + (isCurrent ? 'Active' : 'Use') + '</button>' +
             '</div>';
         }
 
-        var cardHtml = '<div style="background:linear-gradient(145deg,#161920 0%,#0d0f14 100%);border:1px solid rgba(255,255,255,0.08);border-radius:16px;padding:28px;width:420px;box-shadow:0 20px 50px rgba(0,0,0,0.6);font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;color:#f5f6f8;transition:all 0.3s cubic-bezier(0.16,1,0.3,1);transform:scale(0.95);opacity:0;" id="sls-provider-card">' +
-            '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">' +
+        var cardHtml = '<div style="background: #1e2024; border: 1px solid #3d4450; border-radius: 4px; padding: 24px; width: 440px; box-shadow: 0 4px 16px rgba(0,0,0,0.5); font-family: \'Motiva Sans\', sans-serif; color: #dcdedf; transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1); transform: scale(0.95); opacity: 0;" id="sls-provider-card">' +
+            '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;">' +
                 '<div>' +
-                    '<h2 style="margin:0;font-size:20px;font-weight:700;background:linear-gradient(90deg,#fff 0%,#a5aab6 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;">Change Provider</h2>' +
-                    '<p style="margin:4px 0 0;font-size:12px;color:#6b7280;font-weight:500;">AppID: <span style="color:#9ca3af;font-family:monospace;">' + appid + '</span></p>' +
+                    '<h2 style="margin:0; font-size:22px; font-weight:300; color: #fff; text-transform: uppercase; letter-spacing: 1px;">Change Provider</h2>' +
+                    '<p style="margin:4px 0 0; font-size:14px; color:#969696;">AppID: ' + appid + '</p>' +
                 '</div>' +
-                '<button id="sls-prov-close" style="background:rgba(255,255,255,0.05);border:none;color:#9ca3af;font-size:20px;cursor:pointer;width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;transition:all 0.2s;">&times;</button>' +
+                '<button id="sls-prov-close" class="sls-btn-close Focusable" tabindex="-1" role="button">&times;</button>' +
             '</div>' +
             '<div id="sls-provider-list" style="max-height:320px;overflow-y:auto;margin-bottom:16px;">' + rows + '</div>' +
-            '<div id="sls-prov-status" style="display:none;text-align:center;padding:12px;font-size:13px;color:#a5b4fc;background:rgba(99,102,241,0.1);border:1px solid rgba(99,102,241,0.2);border-radius:8px;margin-bottom:16px;"></div>' +
-            '<div style="display:flex;justify-content:flex-end;">' +
-                '<button id="sls-prov-cancel" style="background:transparent;border:1px solid rgba(255,255,255,0.1);color:#9ca3af;padding:10px 20px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;transition:all 0.2s;">Close</button>' +
+            '<div id="sls-prov-status" style="display:none;text-align:center;padding:12px;font-size:14px;color:#dcdedf;background:rgba(172,178,201,0.1);border-radius:2px;margin-bottom:16px;"></div>' +
+            '<div style="display:flex;justify-content:flex-end;gap:10px;">' +
+                '<button id="sls-prov-cancel" class="sls-btn-action Focusable" tabindex="-1" role="button" style="padding: 0 24px; height: 36px;">Close</button>' +
             '</div>' +
         '</div>';
 
         overlay.innerHTML = cardHtml;
 
         var style = document.createElement('style');
-        style.textContent = '#sls-prov-close:hover { background: rgba(255,255,255,0.1) !important; color: #fff !important; }' +
-            ' #sls-prov-cancel:hover { background: rgba(255,255,255,0.03) !important; color: #fff !important; border-color: rgba(255,255,255,0.2) !important; }' +
-            ' [data-sls-provider-idx]:not(:disabled):hover { filter: brightness(1.15); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.3); }';
+        style.textContent = ' .sls-btn-action { display: flex; justify-content: center; align-items: center; background: rgba(172, 178, 201, 0.14); color: rgb(220, 222, 223); border: none; border-radius: 2px; padding: 8px 16px; font-size: 16px; font-weight: 400; font-family: "Motiva Sans", sans-serif; height: 48px; box-sizing: border-box; cursor: pointer; text-decoration: none; transition: background 0.1s ease; }' +
+            ' .sls-btn-action:not(:disabled):hover { background: rgba(172, 178, 201, 0.25); }' +
+            ' .sls-btn-action:not(:disabled):active { background: rgba(172, 178, 201, 0.30); }' +
+            ' .sls-btn-close { background: transparent; border: none; color: #969696; font-size: 24px; cursor: pointer; width: 32px; height: 32px; border-radius: 2px; display: flex; align-items: center; justify-content: center; transition: background 0.1s ease; }' +
+            ' .sls-btn-close:hover { background: rgba(172, 178, 201, 0.14); color: #fff; }';
         overlay.appendChild(style);
         document.body.appendChild(overlay);
 
@@ -325,6 +404,11 @@
         document.getElementById('sls-prov-cancel').onclick = closeModal;
 
         var provBtns = overlay.querySelectorAll('[data-sls-provider-idx]');
+        
+        var modalButtons = [document.getElementById('sls-prov-close')];
+        provBtns.forEach(function(b) { modalButtons.push(b); });
+        modalButtons.push(document.getElementById('sls-prov-cancel'));
+        trapSteamGamepadModal(overlay, modalButtons);
         provBtns.forEach(function(btn) {
             btn.onclick = function(e) {
                 e.preventDefault(); e.stopPropagation();
@@ -359,7 +443,7 @@
                                         clearInterval(timer);
                                         statusEl.style.color = '#34d399';
                                         var pl = document.querySelector('.sls-provider-label');
-                                        if (pl) pl.innerHTML = 'Provider: <span style="color:#a5b4fc;font-weight:600;">' + luaProviders[idx].name + '</span>';
+                                        if (pl) pl.innerHTML = 'Lua Provider: <span style="color:#a5b4fc;font-weight:600;">' + luaProviders[idx].name + '</span>';
                                         provBtns.forEach(function(b) { b.disabled = false; b.style.opacity = '1'; b.style.cursor = 'pointer'; });
                                     }
                                     else if (/not available|failed|error|invalid/i.test(currentStatus)) {
@@ -395,52 +479,86 @@
             '.sls-remove-lua-btn, .sls-config-btn, .sls-provider-label, .sls-change-provider-btn'
         ).forEach(function(el) { el.remove(); });
 
+        // Detect Steam Deck / Big Picture Mode (GamepadUI) vs Desktop Mode
+        var isDesktop = !!((document.body && document.body.classList.contains('DesktopUI')) || document.querySelector('.DesktopUI'));
+        var isDeckOrBigPicture = !isDesktop;
+        var buttonMargin = isDeckOrBigPicture ? 'margin-left: 10px;' : 'margin-right: 10px;';
+        var buttonHeight = isDeckOrBigPicture ? '48px' : '32px';
+        var buttonPadding = isDeckOrBigPicture ? '8px 16px' : '0 16px';
+
+        // --- Steam-native button style ---
+        var steamBtnStyle = 'display: flex; align-items: center; justify-content: center; ' +
+            'background: rgba(172, 178, 201, 0.14); color: rgb(220, 222, 223); ' +
+            'border: none; border-radius: 2px; padding: ' + buttonPadding + '; ' + buttonMargin + ' ' +
+            'font-size: 16px; font-weight: 400; font-family: "Motiva Sans", sans-serif; ' +
+            'height: ' + buttonHeight + '; box-sizing: border-box; cursor: pointer; ' +
+            'text-decoration: none; transition: background 0.1s ease;';
+
+        function makeSteamButton(className, text, extraAttrs) {
+            var btn = document.createElement('div');
+            btn.className = className + ' Focusable';
+            btn.setAttribute('tabindex', '-1');
+            btn.setAttribute('role', 'button');
+            btn.dataset.slsAppid = appid;
+            btn.dataset.slsAppId = appid;
+            btn.style.cssText = steamBtnStyle;
+            if (extraAttrs) {
+                for (var k in extraAttrs) btn.setAttribute(k, extraAttrs[k]);
+            }
+
+            var label = document.createElement('span');
+            label.style.cssText = 'white-space: nowrap;';
+            label.innerText = text;
+            btn.appendChild(label);
+
+            // Gamepad focus styling (match Steam's focus ring)
+            btn.addEventListener('vgp_onfocus', function() {
+                btn.style.background = 'rgba(172, 178, 201, 0.30)';
+                btn.style.outline = '2px solid white';
+                btn.style.outlineOffset = '2px';
+            });
+            btn.addEventListener('vgp_onblur', function() {
+                btn.style.background = 'rgba(172, 178, 201, 0.14)';
+                btn.style.outline = 'none';
+            });
+
+            // Hover styling
+            btn.addEventListener('mouseenter', function() {
+                btn.style.background = 'rgba(172, 178, 201, 0.25)';
+            });
+            btn.addEventListener('mouseleave', function() {
+                btn.style.background = 'rgba(172, 178, 201, 0.14)';
+            });
+
+            return btn;
+        }
+
         // 1. Remove Lua Button
-        var removeBtn = document.createElement('div');
-        removeBtn.className = 'sls-remove-lua-btn sls-lua-btn';
-        removeBtn.dataset.slsAppid = appid; // lowercase 'i' for data-sls-appid
-        removeBtn.dataset.slsAppId = appid; // keep camelCase one just in case
-        removeBtn.style.display = 'inline-block';
-        removeBtn.style.marginRight = '8px';
-        
-        var luaLink = document.createElement('a');
-        luaLink.href = 'javascript:void(0)';
-        luaLink.style.cssText = 'display: inline-block; background: linear-gradient(to right, #75b022 5%, #588a1b 95%); border-radius: 2px; padding: 1px; cursor: pointer; text-decoration: none; filter: hue-rotate(110deg) brightness(1.2); box-shadow: 0 1px 3px rgba(0,0,0,0.4);';
-        
-        var luaSpan = document.createElement('span');
-        luaSpan.style.cssText = 'display: block; background: transparent; padding: 0 15px; font-size: 15px; line-height: 30px; color: #d2efa9; text-shadow: 1px 1px 2px rgba(0,0,0,0.3); font-family: "Motiva Sans", sans-serif;';
-        luaSpan.innerText = 'Remove Lua';
-        
-        luaLink.appendChild(luaSpan);
-        removeBtn.appendChild(luaLink);
+        var removeBtn = makeSteamButton('sls-remove-lua-btn sls-lua-btn', 'Remove Lua');
+        var removeBtnLabel = removeBtn.querySelector('span');
+
+        removeBtn.addEventListener('vgp_onok', function(e) {
+            e.preventDefault(); e.stopPropagation();
+            removeBtn.click();
+        });
 
         // 2. Config Button
-        var configBtn = document.createElement('div');
-        configBtn.className = 'sls-config-btn';
-        configBtn.dataset.slsAppId = appid;
-        configBtn.style.display = 'inline-block';
-        configBtn.style.marginRight = '8px';
-        
-        var configLink = document.createElement('a');
-        configLink.href = 'javascript:void(0)';
-        configLink.style.cssText = 'display: inline-block; background: linear-gradient(to right, #75b022 5%, #588a1b 95%); border-radius: 2px; padding: 1px; cursor: pointer; text-decoration: none; filter: hue-rotate(200deg) brightness(1.1); box-shadow: 0 1px 3px rgba(0,0,0,0.4);';
-        
-        var configSpan = document.createElement('span');
-        configSpan.style.cssText = 'display: block; background: transparent; padding: 0 15px; font-size: 15px; line-height: 30px; color: #d2efa9; text-shadow: 1px 1px 2px rgba(0,0,0,0.3); font-family: "Motiva Sans", sans-serif;';
-        configSpan.innerText = 'Config';
-        
-        configLink.appendChild(configSpan);
-        configBtn.appendChild(configLink);
+        var configBtn = makeSteamButton('sls-config-btn', 'Config');
 
-        configLink.onclick = function(e) {
+        configBtn.addEventListener('vgp_onok', function(e) {
+            e.preventDefault(); e.stopPropagation();
+            configBtn.click();
+        });
+
+        configBtn.onclick = function(e) {
             e.preventDefault();
             e.stopPropagation();
             openSlsConfig(appid);
         };
 
         function setRestartState() {
-            luaSpan.innerText = 'Restart Steam...';
-            luaLink.onclick = function(e) {
+            removeBtnLabel.innerText = 'Restart Steam...';
+            removeBtn.onclick = function(e) {
                 e.preventDefault(); e.stopPropagation();
                 log('Restart requested');
                 fetch('http://127.0.0.1:9001/restart', { mode: 'no-cors' }).catch(function(){});
@@ -451,28 +569,37 @@
             setRestartState();
         }
 
-        luaLink.onclick = function(e) {
+        removeBtn.onclick = function(e) {
             e.preventDefault();
             e.stopPropagation();
             
             log('Remove clicked for ' + appid);
             
             var modalOverlay = document.createElement('div');
-            modalOverlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:999999;display:flex;justify-content:center;align-items:center;backdrop-filter:blur(5px);';
-            modalOverlay.innerHTML = '<div style="background:#1a1c23;border:1px solid #2a2d36;border-radius:12px;padding:30px;width:400px;box-shadow:0 15px 30px rgba(0,0,0,0.5);font-family:Inter,sans-serif;color:#fff;text-align:center;">' +
-                '<h2 style="margin:0 0 10px;font-size:20px;font-weight:600;color:#e8e9eb;">Remove Lua</h2>' +
-                '<p style="margin:0 0 20px;font-size:13px;color:#8a8d96;">Remove Lua and Game files for AppID <b>' + appid + '</b>?</p>' +
-                '<div style="display:flex;justify-content:center;gap:10px;">' +
-                    '<button id="sls-remove-cancel" style="background:transparent;border:1px solid #333640;color:#e8e9eb;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;">Cancel</button>' +
-                    '<button id="sls-remove-confirm" style="background:#ff4d4d;border:none;color:#fff;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;box-shadow:0 4px 10px rgba(255,77,77,0.3);">Remove</button>' +
+            modalOverlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:999999;display:flex;justify-content:center;align-items:center;backdrop-filter:blur(8px);';
+            modalOverlay.innerHTML = '<div style="background: #1e2024; border: 1px solid #3d4450; border-radius: 4px; padding: 24px; width: 440px; box-shadow: 0 4px 16px rgba(0,0,0,0.5); font-family: \'Motiva Sans\', sans-serif; color: #dcdedf;">' +
+                '<h2 style="margin:0 0 10px;font-size:22px;font-weight:300;color:#fff;text-transform:uppercase;letter-spacing:1px;">Remove Lua</h2>' +
+                '<p style="margin:0 0 24px;font-size:16px;color:#969696;">Remove Lua and Game files for AppID <b>' + appid + '</b>?</p>' +
+                '<div style="display:flex;justify-content:flex-end;gap:10px;">' +
+                    '<button id="sls-remove-cancel" class="sls-btn-action Focusable" tabindex="-1" role="button" style="padding: 0 24px; height: 36px;">Cancel</button>' +
+                    '<button id="sls-remove-confirm" class="sls-btn-action Focusable" tabindex="-1" role="button" style="padding: 0 24px; height: 36px; background: rgba(220, 38, 38, 0.8); color: #fff;">Remove</button>' +
                 '</div>' +
+                '<style>' +
+                ' .sls-btn-action { display: flex; justify-content: center; align-items: center; background: rgba(172, 178, 201, 0.14); color: rgb(220, 222, 223); border: none; border-radius: 2px; padding: 8px 16px; font-size: 16px; font-weight: 400; font-family: "Motiva Sans", sans-serif; height: 48px; box-sizing: border-box; cursor: pointer; text-decoration: none; transition: background 0.1s ease; }' +
+                ' .sls-btn-action:hover { background: rgba(172, 178, 201, 0.25); }' +
+                ' .sls-btn-action:active { background: rgba(172, 178, 201, 0.30); }' +
+                ' #sls-remove-confirm:hover { background: rgba(220, 38, 38, 1) !important; }' +
+                '</style>' +
             '</div>';
             
             document.body.appendChild(modalOverlay);
+            
+            var cancelBtn = document.getElementById('sls-remove-cancel');
+            var confirmBtn = document.getElementById('sls-remove-confirm');
+            trapSteamGamepadModal(modalOverlay, [cancelBtn, confirmBtn]);
 
-            document.getElementById('sls-remove-cancel').onclick = function() { modalOverlay.remove(); };
-            document.getElementById('sls-remove-confirm').onclick = function() {
-                var confirmBtn = document.getElementById('sls-remove-confirm');
+            cancelBtn.onclick = function() { modalOverlay.remove(); };
+            confirmBtn.onclick = function() {
                 confirmBtn.innerText = 'Processing...';
                 confirmBtn.style.opacity = '0.5';
                 confirmBtn.style.pointerEvents = 'none';
@@ -492,35 +619,29 @@
         };
 
         // 3. Change Provider Button
-        var changeProvBtn = document.createElement('div');
-        changeProvBtn.className = 'sls-change-provider-btn';
-        changeProvBtn.dataset.slsAppId = appid;
-        changeProvBtn.style.display = 'inline-block';
-        changeProvBtn.style.marginRight = '8px';
-        
-        var changeLink = document.createElement('a');
-        changeLink.href = 'javascript:void(0)';
-        changeLink.style.cssText = 'display: inline-block; background: linear-gradient(to right, #75b022 5%, #588a1b 95%); border-radius: 2px; padding: 1px; cursor: pointer; text-decoration: none; filter: hue-rotate(280deg) brightness(1.1); box-shadow: 0 1px 3px rgba(0,0,0,0.4);';
-        
-        var changeSpan = document.createElement('span');
-        changeSpan.style.cssText = 'display: block; background: transparent; padding: 0 15px; font-size: 15px; line-height: 30px; color: #d2efa9; text-shadow: 1px 1px 2px rgba(0,0,0,0.3); font-family: "Motiva Sans", sans-serif;';
-        changeSpan.innerText = 'Change Provider';
-        
-        changeLink.appendChild(changeSpan);
-        changeProvBtn.appendChild(changeLink);
+        var changeProvBtn = makeSteamButton('sls-change-provider-btn', 'Change Provider');
 
-        changeLink.onclick = function(e) {
+        changeProvBtn.addEventListener('vgp_onok', function(e) {
+            e.preventDefault(); e.stopPropagation();
+            changeProvBtn.click();
+        });
+
+        changeProvBtn.onclick = function(e) {
             e.preventDefault();
             e.stopPropagation();
             openChangeProviderModal(appid, provider || '');
         };
 
-        // 4. Provider label
+        // 4. Provider label (styled as a passive Steam-style element)
         var providerLabel = document.createElement('div');
         providerLabel.className = 'sls-provider-label';
-        providerLabel.style.cssText = 'display:inline-block;margin-right:8px;padding:0 10px;font-size:12px;line-height:30px;color:#8a8d96;font-family:"Motiva Sans",sans-serif;vertical-align:middle;';
+        providerLabel.style.cssText = 'display: flex; align-items: center; justify-content: center; ' +
+            'background: transparent; color: rgb(139, 147, 164); ' +
+            'border: none; border-radius: 2px; padding: ' + (isDeckOrBigPicture ? '8px 12px' : '0 12px') + '; ' + buttonMargin + ' ' +
+            'font-size: 14px; font-weight: 400; font-family: "Motiva Sans", sans-serif; ' +
+            'height: ' + buttonHeight + '; box-sizing: border-box; white-space: nowrap;';
         if (provider) {
-            providerLabel.innerHTML = 'Provider: <span style="color:#a5b4fc;font-weight:600;">' + provider + '</span>';
+            providerLabel.innerHTML = 'Provider: <span style="color:rgb(220, 222, 223);font-weight:500;margin-left:4px;">' + provider + '</span>';
         }
 
         // Mark this container as injected BEFORE inserting DOM nodes so the
@@ -530,11 +651,18 @@
 
         // Insert SLS buttons BEFORE the Manage gear (manageContainer),
         // so they appear first in the row. Reverse insertion order keeps
-        // visual order: Remove Lua → Config → Change Provider → Provider Label.
-        if (provider) parentNode.insertBefore(providerLabel, parentNode.firstChild);
+        // visual order: Provider Label → Remove Lua → Config → Change Provider.
         parentNode.insertBefore(changeProvBtn, parentNode.firstChild);
         parentNode.insertBefore(configBtn, parentNode.firstChild);
         parentNode.insertBefore(removeBtn, parentNode.firstChild);
+        if (provider) parentNode.insertBefore(providerLabel, parentNode.firstChild);
+        
+        // Register for Gamepad Focus
+        setTimeout(function() {
+            registerSteamFocusNode(removeBtn);
+            registerSteamFocusNode(configBtn);
+            registerSteamFocusNode(changeProvBtn);
+        }, 10);
     }
 
     function addRemoveLuaButton() {

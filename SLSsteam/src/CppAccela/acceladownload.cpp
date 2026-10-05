@@ -3,6 +3,7 @@
 // CppAccela modules — full native pipeline
 #include "accelapath.hpp"
 #include "accelaluaparser.hpp"
+#include "../atomic_file.hpp"
 
 #include "../feats/apps.hpp"
 #include "../config.hpp"
@@ -19,6 +20,8 @@
 #include <sys/wait.h>
 #include <sys/prctl.h>
 #include <unistd.h>
+#include <dirent.h>
+#include <fcntl.h>
 
 // Include LOG_* for parent-side functions (launchForApp, pollPendingInstalls)
 #include "../log.hpp"
@@ -99,6 +102,109 @@ namespace CppAccela::Download
         rename(tmp.c_str(), path.c_str());
     }
 
+    // ── Orphan process cleanup ────────────────────────────────────────────────
+    void terminateOrphanProcesses(uint32_t appId, const std::string& downloadDir)
+    {
+        const std::string appIdStr = std::to_string(appId);
+        const pid_t myPid = getpid();
+        std::vector<pid_t> toKill;
+
+        // 1. Check PID file if present
+        const char* tmpDir = getenv("TMPDIR");
+        std::string pidFilePath = std::string(tmpDir ? tmpDir : "/tmp")
+                                  + "/sls_dl_" + appIdStr + ".pid";
+        {
+            FILE* pf = fopen(pidFilePath.c_str(), "r");
+            if (pf)
+            {
+                pid_t savedPid = 0;
+                if (fscanf(pf, "%d", &savedPid) == 1 && savedPid > 1 && savedPid != myPid)
+                {
+                    toKill.push_back(savedPid);
+                }
+                fclose(pf);
+                unlink(pidFilePath.c_str());
+            }
+        }
+
+        // 2. Scan /proc for any accela-helper or DepotDownloader matching appId or downloadDir
+        DIR* procDir = opendir("/proc");
+        if (procDir)
+        {
+            struct dirent* ent;
+            while ((ent = readdir(procDir)) != nullptr)
+            {
+                if (ent->d_type != DT_DIR && ent->d_type != DT_UNKNOWN) continue;
+                char* endptr = nullptr;
+                long pidL = strtol(ent->d_name, &endptr, 10);
+                if (*endptr != '\0' || pidL <= 1 || pidL == myPid) continue;
+                pid_t pid = static_cast<pid_t>(pidL);
+
+                std::string cmdlinePath = std::string("/proc/") + ent->d_name + "/cmdline";
+                int fd = open(cmdlinePath.c_str(), O_RDONLY);
+                if (fd < 0) continue;
+
+                char buf[2048];
+                ssize_t n = read(fd, buf, sizeof(buf) - 1);
+                close(fd);
+                if (n <= 0) continue;
+                buf[n] = '\0';
+
+                // cmdline arguments are null-separated; convert to space-separated for searching
+                for (ssize_t i = 0; i < n; ++i)
+                {
+                    if (buf[i] == '\0') buf[i] = ' ';
+                }
+                std::string cmd(buf, n);
+
+                bool isAccelaHelper = (cmd.find("accela-helper") != std::string::npos &&
+                                       cmd.find(appIdStr) != std::string::npos);
+                bool isDepotDownloader = (cmd.find("DepotDownloaderMod") != std::string::npos ||
+                                          cmd.find("DepotDownloader") != std::string::npos) &&
+                                         (cmd.find(appIdStr) != std::string::npos ||
+                                          (!downloadDir.empty() && cmd.find(downloadDir) != std::string::npos));
+
+                if (isAccelaHelper || isDepotDownloader)
+                {
+                    toKill.push_back(pid);
+                }
+            }
+            closedir(procDir);
+        }
+
+        // 3. Terminate all matched processes
+        for (pid_t pid : toKill)
+        {
+            if (kill(pid, 0) == 0) // check if still alive
+            {
+                LOG_INFO("AccelaDownload: terminating orphan process %d for appid=%u\n", pid, appId);
+                pid_t pgid = getpgid(pid);
+                if (pgid > 1)
+                {
+                    kill(-pgid, SIGCONT);
+                    kill(-pgid, SIGKILL);
+                }
+                kill(pid, SIGCONT);
+                kill(pid, SIGKILL);
+            }
+        }
+
+        // 4. Wait for them to disappear so file locks are released
+        if (!toKill.empty())
+        {
+            for (int i = 0; i < 30; ++i)
+            {
+                bool anyAlive = false;
+                for (pid_t pid : toKill)
+                {
+                    if (kill(pid, 0) == 0) { anyAlive = true; break; }
+                }
+                if (!anyAlive) break;
+                usleep(10000); // 10ms (max 300ms)
+            }
+        }
+    }
+
     // ── Parent-side: fork + exec ───────────────────────────────────────────────
     // LOG_* macros are safe here — we are still in the Steam process.
 
@@ -115,11 +221,44 @@ namespace CppAccela::Download
             return false;
         }
 
+        if (isPending(appId))
+        {
+            LOG_WARN("AccelaDownload: appid=%u is already in queue, cancelling previous download\n", appId);
+            cancelForApp(appId);
+        }
+
         const std::string helperPath = getHelperPath();
         if (helperPath.empty())
         {
             LOG_WARN("AccelaDownload: accela-helper binary not found\n");
             return false;
+        }
+
+        // Fetch the official installdir from Steam's memory if available (MUST DO BEFORE FORK)
+        char installDirBuf[512] = {0};
+        if (g_pClientApps)
+        {
+            g_pClientApps->getAppData(appId, "config/installdir", installDirBuf, sizeof(installDirBuf));
+        }
+
+        // Clean up any orphaned processes and lingering file locks from previous sessions/crashes
+        terminateOrphanProcesses(appId, installDirBuf);
+
+        // If a stale appmanifest was left behind from a previous failed run, remove it
+        std::string steamRoot = CppAccela::Path::findSteamRoot();
+        if (!steamRoot.empty())
+        {
+            std::string staleAcf = steamRoot + "/steamapps/appmanifest_" + std::to_string(appId) + ".acf";
+            std::error_code ec;
+            if (fs::exists(staleAcf, ec))
+            {
+                LOG_INFO("AccelaDownload: removing stale manifest from previous failed attempt: %s\n", staleAcf.c_str());
+                fs::remove(staleAcf, ec);
+            }
+
+            // Clean up any stale staging folder from an earlier aborted attempt
+            std::string staleDownloading = steamRoot + "/steamapps/downloading/" + std::to_string(appId);
+            AtomicFile::removePath(staleDownloading);
         }
 
         // Fix 4: write "starting" JSON from the parent *before* forking.
@@ -129,13 +268,7 @@ namespace CppAccela::Download
         writeStartingJson(appId);
 
         const std::string appIdStr = std::to_string(appId);
-
-        // Fetch the official installdir from Steam's memory if available (MUST DO BEFORE FORK)
-        char installDirBuf[512] = {0};
-        if (g_pClientApps)
-        {
-            g_pClientApps->getAppData(appId, "config/installdir", installDirBuf, sizeof(installDirBuf));
-        }
+        const pid_t parentPid = getpid();
 
         pid_t pid = fork();
         if (pid < 0)
@@ -151,8 +284,9 @@ namespace CppAccela::Download
             // This avoids all multithreading deadlocks from Steam's threads.
 
             setsid();
-            prctl(PR_SET_PDEATHSIG, SIGTERM);
-            if (getppid() == 1) _exit(1);
+            // Use SIGKILL so child terminates immediately on parent death even if suspended/paused!
+            prctl(PR_SET_PDEATHSIG, SIGKILL);
+            if (getppid() != parentPid) _exit(1);
 
             if (installDirBuf[0] != '\0')
             {
@@ -210,19 +344,33 @@ namespace CppAccela::Download
             const pid_t pid = s_queue[i].pid;
             LOG_INFO("AccelaDownload: cancelling appid=%u (PID %d)\n", appId, pid);
 
-            // Kill the entire process group (accela-helper + dotnet children)
+            // Wake up if paused (SIGSTOP) so signal can be processed, then send SIGTERM
+            kill(-pid, SIGCONT);
+            kill(pid,  SIGCONT);
             kill(-pid, SIGTERM);
             kill(pid,  SIGTERM);
 
-            // Wait up to 5 s for the child to exit so its file handles are
-            // closed before we delete the partial files.  Use WNOHANG polling
+            // Wait up to 2 s for the child to exit so its file handles are
+            // closed before we delete the partial files. Use WNOHANG polling
             // so we don't block Steam's IPC thread indefinitely.
-            for (int attempt = 0; attempt < 50; ++attempt)
+            bool exited = false;
+            for (int attempt = 0; attempt < 20; ++attempt)
             {
                 int status = 0;
-                if (waitpid(pid, &status, WNOHANG) > 0) break;
+                if (waitpid(pid, &status, WNOHANG) > 0) { exited = true; break; }
                 usleep(100000); // 100 ms
             }
+
+            if (!exited)
+            {
+                // Force kill if it didn't exit
+                kill(-pid, SIGKILL);
+                kill(pid,  SIGKILL);
+                waitpid(pid, nullptr, WNOHANG);
+            }
+
+            // Also clean up any lingering orphan processes for this app
+            terminateOrphanProcesses(appId, "");
 
             // Update progress JSON to "cancelled" phase immediately so the UI
             // card changes state before the cleanup even starts.
@@ -238,40 +386,16 @@ namespace CppAccela::Download
             FILE* pf = fopen(progressTmp.c_str(), "w");
             if (pf) { fputs(cancelledJson, pf); fclose(pf); rename(progressTmp.c_str(), progressPath.c_str()); }
 
-            // Remove the partial game directory and incomplete ACF manifest.
-            // This mirrors what the user-facing /remove?game=true endpoint does.
-            LOG_INFO("AccelaDownload: cleaning up partial files for appid=%u\n", appId);
-            Apps::deleteGameFiles(appId);
-
-            // Also clean up based on Lua file because manifest might not exist yet during download
-            std::string stplugPath = CppAccela::Path::stplugDir();
-            std::string luaPath = stplugPath + "/" + std::to_string(appId) + ".lua";
-            auto lua = CppAccela::LuaParser::parseFile(luaPath);
-            if (lua.valid)
+            // Clean up the temporary downloading directory.
+            // Crucially: do NOT call Apps::deleteGameFiles(appId) or touch steamapps/common/
+            // so that any existing installed game files are preserved without corruption!
+            std::string steamRoot = CppAccela::Path::findSteamRoot();
+            if (!steamRoot.empty())
             {
-                std::string name = lua.gameName;
-                std::string s;
-                for (unsigned char c : name) {
-                    if (std::isalnum(c) || c == '_' || c == '-' || c == ' ')
-                        s.push_back(static_cast<char>(c));
-                }
-                size_t start = s.find_first_not_of(' ');
-                if (start != std::string::npos) {
-                    size_t end = s.find_last_not_of(' ');
-                    s = s.substr(start, end - start + 1);
-                    // std::replace(s.begin(), s.end(), ' ', '_'); // removed
-                } else s = "";
-                if (s.empty()) s = "App_" + std::to_string(appId);
-
-                std::string steamRoot = CppAccela::Path::findSteamRoot();
-                if (!steamRoot.empty() && !s.empty()) {
-                    std::string downloadDir = steamRoot + "/steamapps/common/" + s;
-                    std::error_code ec;
-                    if (std::filesystem::exists(downloadDir, ec)) {
-                        LOG_INFO("AccelaDownload: cleaning up game directory %s\n", downloadDir.c_str());
-                        std::filesystem::remove_all(downloadDir, ec);
-                    }
-                }
+                std::string downloadingDir = steamRoot + "/steamapps/downloading/" + std::to_string(appId);
+                LOG_INFO("AccelaDownload: cancel cleaning up temporary download directory %s for appid=%u\n",
+                         downloadingDir.c_str(), appId);
+                AtomicFile::removePath(downloadingDir);
             }
 
             // Cleanup global temp files that accela-helper may leave behind on SIGTERM
@@ -433,6 +557,13 @@ namespace CppAccela::Download
                              "for appid=%u (exit %d)\n",
                              pendingAppId,
                              WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+
+                    std::string steamRoot = CppAccela::Path::findSteamRoot();
+                    if (!steamRoot.empty())
+                    {
+                        std::string downloadingDir = steamRoot + "/steamapps/downloading/" + std::to_string(pendingAppId);
+                        AtomicFile::removePath(downloadingDir);
+                    }
                 }
 
                 // Swap-with-last O(1) removal
@@ -460,6 +591,14 @@ namespace CppAccela::Download
         for (int i = 0; i < s_count; ++i)
             if (s_queue[i].appId == appId) return true;
         return false;
+    }
+
+    std::vector<uint32_t> getPendingAppIds()
+    {
+        std::vector<uint32_t> ids;
+        for (int i = 0; i < s_count; ++i)
+            ids.push_back(s_queue[i].appId);
+        return ids;
     }
 
     void cacheInstallRequest(IClientAppManager* pClientAppManager, uint32_t appId, uint32_t library, uint8_t a4)
@@ -499,6 +638,81 @@ namespace CppAccela::Download
         if (s_cachedRequests.erase(appId))
         {
             LOG_INFO("AccelaDownload: discarded cached install request for appid=%u\n", appId);
+        }
+    }
+
+    void shutdown()
+    {
+        LOG_INFO("AccelaDownload: shutting down, terminating %d active download(s)\n", s_count);
+        std::string steamRoot = CppAccela::Path::findSteamRoot();
+        for (int i = 0; i < s_count; ++i)
+        {
+            const pid_t pid = s_queue[i].pid;
+            const uint32_t appId = s_queue[i].appId;
+            kill(-pid, SIGCONT);
+            kill(pid,  SIGCONT);
+            kill(-pid, SIGKILL);
+            kill(pid,  SIGKILL);
+
+            if (!steamRoot.empty())
+            {
+                std::string downloadingDir = steamRoot + "/steamapps/downloading/" + std::to_string(appId);
+                LOG_INFO("AccelaDownload: shutdown cleaning up temporary download directory %s\n", downloadingDir.c_str());
+                AtomicFile::removePath(downloadingDir);
+            }
+        }
+        s_count = 0;
+    }
+
+    void purgeStaleDownloads()
+    {
+        const std::string steamRoot = CppAccela::Path::findSteamRoot();
+        if (steamRoot.empty()) return;
+
+        const std::string downloadingPath = steamRoot + "/steamapps/downloading";
+        std::error_code ec;
+        if (!fs::exists(downloadingPath, ec) || !fs::is_directory(downloadingPath, ec))
+            return;
+
+        const char* tmpDir = getenv("TMPDIR");
+        const std::string tmpBase = tmpDir ? tmpDir : "/tmp";
+        const std::string stplugDir = CppAccela::Path::stplugDir();
+
+        for (const auto& entry : fs::directory_iterator(downloadingPath, ec))
+        {
+            if (ec) break;
+            if (entry.is_directory(ec))
+            {
+                std::string folderName = entry.path().filename().string();
+                bool isNumeric = !folderName.empty() && std::all_of(folderName.begin(), folderName.end(), ::isdigit);
+                if (isNumeric)
+                {
+                    uint32_t appId = 0;
+                    try { appId = std::stoul(folderName); } catch (...) { continue; }
+
+                    if (!isPending(appId))
+                    {
+                        bool isSlsApp = false;
+                        if (!stplugDir.empty() && fs::exists(stplugDir + "/" + folderName + ".lua", ec))
+                        {
+                            isSlsApp = true;
+                        }
+                        else if (fs::exists(tmpBase + "/sls_dl_" + folderName + ".json", ec) ||
+                                 fs::exists(tmpBase + "/sls_dl_" + folderName + ".pid", ec))
+                        {
+                            isSlsApp = true;
+                        }
+
+                        if (isSlsApp)
+                        {
+                            terminateOrphanProcesses(appId, "");
+                            LOG_INFO("AccelaDownload: purging stale leftover download directory: %s\n",
+                                     entry.path().string().c_str());
+                            AtomicFile::removePath(entry.path().string());
+                        }
+                    }
+                }
+            }
         }
     }
 

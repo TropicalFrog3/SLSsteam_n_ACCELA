@@ -1,6 +1,7 @@
 #include "cdpinject.hpp"
 #include "../log.hpp"
 #include "../config.hpp"
+#include "../atomic_file.hpp"
 #include "apps.hpp"
 
 #include <cstring>
@@ -429,6 +430,11 @@ namespace CDPInject
             return false;
         }
 
+        struct timeval tv;
+        tv.tv_sec = 2; // 2 seconds timeout
+        tv.tv_usec = 0;
+        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof(tv));
+
         std::string wsKey = generateWsKey();
         if (!wsHandshake(sock, host, port, path, wsKey))
         {
@@ -454,19 +460,23 @@ namespace CDPInject
             }
         }
 
-        // Enable Page domain to use Page.addScriptToEvaluateOnNewDocument
-        std::string pageEnablePayload = R"({"id":1,"method":"Page.enable"})";
-        cdpSendAndRecv(sock, 1, pageEnablePayload);
-
-        // Add script to evaluate on new document to load injection UI faster on navigations (like Millennium)
-        std::string addScriptPayload = R"({"id":2,"method":"Page.addScriptToEvaluateOnNewDocument","params":{"source":")" + escapedJs + R"("}})";
-        cdpSendAndRecv(sock, 2, addScriptPayload);
-
         // Evaluate immediately in the current context
-        std::string cdpPayload = R"({"id":3,"method":"Runtime.evaluate","params":{"expression":")" + escapedJs + R"(","userGesture":true,"awaitPromise":true}})";
-        cdpSendAndRecv(sock, 3, cdpPayload);
-
+        std::string cdpPayload = R"({"id":1,"method":"Runtime.evaluate","params":{"expression":")" + escapedJs + R"(","userGesture":true}})";
+        std::string resp = cdpSendAndRecv(sock, 1, cdpPayload);
         close(sock);
+
+        if (resp.empty())
+        {
+            LOG_INFO("CDPInject::injectJS: No CDP response for %s (timeout or socket closed)\n", wsUrl.c_str());
+            return false;
+        }
+        if (resp.find("\"exceptionDetails\"") != std::string::npos)
+        {
+            LOG_INFO("CDPInject::injectJS: Script threw in %s: %.300s\n", wsUrl.c_str(), resp.c_str());
+            return false;
+        }
+
+        LOG_INFO("CDPInject::injectJS: Evaluated successfully in %s\n", wsUrl.c_str());
         return true;
     }
 
@@ -656,10 +666,11 @@ namespace CDPInject
         if (b64data.empty()) { LOG_INFO("CDPInject::downloadViaPage: Empty data (HTTP %d)\n", httpStatus); return httpStatus; }
 
         std::string decoded = base64::from_base64(b64data);
-        FILE* fp = fopen(destPath.c_str(), "wb");
-        if (!fp) { LOG_INFO("CDPInject::downloadViaPage: Cannot open %s\n", destPath.c_str()); return -1; }
-        fwrite(decoded.data(), 1, decoded.size(), fp);
-        fclose(fp);
+        if (!AtomicFile::write(destPath, decoded, true))
+        {
+            LOG_INFO("CDPInject::downloadViaPage: Failed to write atomically to %s\n", destPath.c_str());
+            return -1;
+        }
 
         LOG_INFO("CDPInject::downloadViaPage: Downloaded %zu bytes (HTTP %d) -> %s\n",
                      decoded.size(), httpStatus, destPath.c_str());
@@ -805,53 +816,50 @@ namespace CDPInject
     void injectDepotSelectionUI(uint32_t appId)
     {
         auto pages = fetchPages();
-        if (pages.empty()) return;
+        if (pages.empty())
+        {
+            LOG_INFO("CDPInject::injectDepotSelectionUI: No CDP pages available (is port 8080 up?)\n");
+            return;
+        }
 
-        std::vector<std::string> pagesToInject;
+        // Popups (MainMenu_uid*, QuickAccess_uid*, notificationtoasts_uid*), menus and
+        // headless contexts are hidden or tiny, so the modal must never land there.
+        auto isExcluded = [](const CDPPage& page)
+        {
+            return page.webSocketDebuggerUrl.empty() ||
+                   page.title.empty() ||
+                   page.title == "SharedJSContext" ||
+                   page.title == "Friends List" ||
+                   page.title.find("_uid") != std::string::npos ||
+                   page.title.find("Menu") != std::string::npos ||
+                   page.title.find("Supernav") != std::string::npos ||
+                   page.title.find("supernav") != std::string::npos;
+        };
+
+        // Pick exactly one visible window, in priority order
+        auto rank = [](const CDPPage& page)
+        {
+            if (page.title == "Steam Big Picture Mode") return 0;
+            if (page.title == "Steam") return 1;
+            if (page.url.find("store.steampowered.com") != std::string::npos) return 2;
+            if (page.title == "SP Overlay") return 3;
+            return 4; // any other valid page, last-resort fallback
+        };
+
+        const CDPPage* target = nullptr;
         for (auto& page : pages)
         {
-            if (page.webSocketDebuggerUrl.empty()) continue;
-
-            // Never inject into supernav dropdowns, context menus, or headless contexts
-            if (page.title == "SharedJSContext" ||
-                page.title.find("Supernav") != std::string::npos ||
-                page.title.find("supernav") != std::string::npos ||
-                page.title.find("Menu") != std::string::npos ||
-                page.title == "Friends List" ||
-                page.title.empty())
-            {
-                continue;
-            }
-
-            // Target the main Steam client window ("Steam") or a dedicated store page window
-            if (page.title == "Steam" ||
-                page.url.find("store.steampowered.com") != std::string::npos)
-            {
-                pagesToInject.push_back(page.webSocketDebuggerUrl);
-            }
+            if (isExcluded(page)) continue;
+            if (!target || rank(page) < rank(*target)) target = &page;
         }
 
-        // Fallback: if no standard window matched, pick the first valid non-menu page
-        if (pagesToInject.empty())
+        if (!target)
         {
-            for (auto& page : pages)
-            {
-                if (page.webSocketDebuggerUrl.empty()) continue;
-                if (page.title == "SharedJSContext" ||
-                    page.title.find("Supernav") != std::string::npos ||
-                    page.title.find("supernav") != std::string::npos ||
-                    page.title.find("Menu") != std::string::npos ||
-                    page.title == "Friends List" ||
-                    page.title.empty())
-                {
-                    continue;
-                }
-                pagesToInject.push_back(page.webSocketDebuggerUrl);
-                break;
-            }
+            LOG_INFO("CDPInject::injectDepotSelectionUI: No suitable window among %zu pages\n", pages.size());
+            return;
         }
-
-        if (pagesToInject.empty()) return;
+        LOG_INFO("CDPInject::injectDepotSelectionUI: Targeting \"%s\" for AppID %u\n", target->title.c_str(), appId);
+        std::vector<std::string> pagesToInject{ target->webSocketDebuggerUrl };
 
         std::string scriptTemplate = loadResourceFile("depot-selection-script.js");
         if (scriptTemplate.empty()) {

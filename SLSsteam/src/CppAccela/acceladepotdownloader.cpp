@@ -1,4 +1,5 @@
 #include "acceladepotdownloader.hpp"
+#include "../atomic_file.hpp"
 
 #include <algorithm>
 #include <array>
@@ -197,6 +198,24 @@ namespace CppAccela::DepotDownloader
         rename(tmp.c_str(), progressPath.c_str());
     }
 
+    static volatile pid_t s_currentChildPid = 0;
+
+    void killCurrentChild()
+    {
+        pid_t pid = s_currentChildPid;
+        if (pid > 0)
+        {
+            pid_t pgid = getpgid(pid);
+            if (pgid > 1)
+            {
+                kill(-pgid, SIGCONT);
+                kill(-pgid, SIGKILL);
+            }
+            kill(pid, SIGCONT);
+            kill(pid, SIGKILL);
+        }
+    }
+
     // ── Subprocess runner ─────────────────────────────────────────────────────
 
     /**
@@ -234,6 +253,7 @@ namespace CppAccela::DepotDownloader
             return -1;
         }
 
+        pid_t helperPid = getpid();
         pid_t pid = fork();
         if (pid < 0)
         {
@@ -245,8 +265,9 @@ namespace CppAccela::DepotDownloader
 
         if (pid == 0)
         {
-            prctl(PR_SET_PDEATHSIG, SIGTERM);
-            if (getppid() == 1) _exit(1);
+            // Use SIGKILL so dotnet immediately terminates if helper dies even if suspended
+            prctl(PR_SET_PDEATHSIG, SIGKILL);
+            if (getppid() != helperPid) _exit(1);
 
             // Child: redirect stdout + stderr into write-end of pipe
             close(pipefd[0]);
@@ -261,6 +282,8 @@ namespace CppAccela::DepotDownloader
             execvp(argv[0], const_cast<char* const*>(argv.data()));
             _exit(127);
         }
+
+        s_currentChildPid = pid;
 
         // Parent: read from read-end, log and parse progress line by line
         close(pipefd[1]);
@@ -379,6 +402,7 @@ namespace CppAccela::DepotDownloader
 
         int status = 0;
         waitpid(pid, &status, 0);
+        s_currentChildPid = 0;
 
         if (WIFEXITED(status)) return WEXITSTATUS(status);
         return -1;
@@ -447,18 +471,23 @@ namespace CppAccela::DepotDownloader
                 installFolder = "App_" + lua.appId;
         }
 
-        const std::string downloadDir =
+        const std::string finalDir =
             destPath + "/steamapps/common/" + installFolder;
+        const std::string stagingDir =
+            destPath + "/steamapps/downloading/" + lua.appId;
 
-        try { fs::create_directories(downloadDir); }
+        // Clean up any stale staging directory from an earlier aborted run
+        AtomicFile::removePath(stagingDir);
+
+        try { fs::create_directories(stagingDir); }
         catch (const std::exception& e)
         {
-            DD_LOG("cannot create download dir %s: %s\n",
-                     downloadDir.c_str(), e.what());
+            DD_LOG("cannot create staging dir %s: %s\n",
+                     stagingDir.c_str(), e.what());
             return result;
         }
-        result.downloadDir = downloadDir;
-        DD_LOG("download dir -> %s\n", downloadDir.c_str());
+        DD_LOG("download staging dir -> %s (final target: %s)\n",
+               stagingDir.c_str(), finalDir.c_str());
 
         // ── Keep only the depots explicitly confirmed by the user ────────────
         std::vector<std::string> selectedDepots;
@@ -544,7 +573,7 @@ namespace CppAccela::DepotDownloader
             cmd.insert(cmd.end(), {
                 "-depotkeys",    keysPath,
                 "-max-downloads","255",
-                "-dir",          downloadDir,
+                "-dir",          stagingDir,
                 "-validate",
             });
 
@@ -585,14 +614,39 @@ namespace CppAccela::DepotDownloader
                                result.depotsDone, result.depotsTotal);
         }
 
-        // ── Cleanup ───────────────────────────────────────────────────────────
+        // ── Cleanup and Finalize ─────────────────────────────────────────────
         std::remove(keysPath.c_str());
         DD_LOG("removed keys VDF\n");
 
-        result.ok = (result.depotsDone > 0);
+        if (result.depotsDone == result.depotsTotal && result.depotsDone > 0)
+        {
+            DD_LOG("all %d depots finished successfully. Merging %s -> %s\n",
+                   result.depotsDone, stagingDir.c_str(), finalDir.c_str());
 
-        DD_LOG("finished %d/%d depots for appid=%s\n",
-                 result.depotsDone, result.depotsTotal, lua.appId.c_str());
+            if (AtomicFile::moveOrMergeDirectory(stagingDir, finalDir))
+            {
+                result.ok = true;
+                result.downloadDir = finalDir;
+                DD_LOG("successfully merged game files into %s\n", finalDir.c_str());
+            }
+            else
+            {
+                DD_LOG("ERROR: failed to move/merge files from %s to %s\n",
+                       stagingDir.c_str(), finalDir.c_str());
+                result.ok = false;
+            }
+        }
+        else
+        {
+            DD_LOG("download failed or incomplete (%d/%d depots). Deleting staging dir %s\n",
+                   result.depotsDone, result.depotsTotal, stagingDir.c_str());
+            AtomicFile::removePath(stagingDir);
+            result.ok = false;
+        }
+
+        DD_LOG("finished %d/%d depots for appid=%s (result=%s)\n",
+                 result.depotsDone, result.depotsTotal, lua.appId.c_str(),
+                 result.ok ? "SUCCESS" : "FAILED");
 
         return result;
     }

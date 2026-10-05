@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 #include <sys/types.h>
 
 /**
@@ -108,6 +109,9 @@ namespace CppAccela::Download
     /** Returns true if appId has an active accela-helper child process. */
     bool isPending(uint32_t appId);
 
+    /** Returns all appIds currently in the pending queue. */
+    std::vector<uint32_t> getPendingAppIds();
+
     /**
      * Send SIGTERM to the accela-helper child for appId.
      * The child will be reaped by the next pollPendingInstalls() call.
@@ -123,5 +127,14 @@ namespace CppAccela::Download
 
     /** Returns true if appId is currently paused (SIGSTOP sent, not yet resumed). */
     bool isPaused(uint32_t appId);
+
+    /** Terminate all active downloads and cleanly kill child processes on shutdown. */
+    void shutdown();
+
+    /** Cleanly terminate any orphaned processes (accela-helper or DepotDownloader) for appId or downloadDir. */
+    void terminateOrphanProcesses(uint32_t appId, const std::string& downloadDir);
+
+    /** Purge stale leftover temporary download directories from crashed or aborted sessions. */
+    void purgeStaleDownloads();
 
 } // namespace CppAccela::Download

@@ -1,6 +1,7 @@
 #include "accelamanifest.hpp"
 
 #include "../curl.hpp"
+#include "../atomic_file.hpp"
 
 // Safe for forked child — no LOG_* globals
 #include <cstdio>
@@ -172,10 +173,8 @@ namespace CppAccela::Manifest
                     const std::string placeholderPath =
                         placeholderDir + "/" + filename;
 
-                    std::ofstream ofs(placeholderPath, std::ios::binary | std::ios::trunc);
-                    if (ofs)
+                    if (AtomicFile::write(placeholderPath, "", true))
                     {
-                        ofs.close();
                         MANIFEST_LOG("created placeholder %s\n", filename.c_str());
                         result.manifestFiles.push_back(placeholderPath);
                     }

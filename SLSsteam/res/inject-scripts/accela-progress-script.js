@@ -1,10 +1,16 @@
 // accela-progress-script.js
-// Injected into every Steam library page (non-SharedJSContext).
-// Polls /progress and /check on port 9001 to show a live download
-// progress card for any game being installed via accela-helper.
+// Injected into Steam library / Big Picture pages (non-SharedJSContext).
+// Polls /active-downloads, /progress, and /check on port 9001 to show live
+// download progress for any game being installed via accela-helper.
 //
-// Tracks PER CONTAINER so both scroll states show the card simultaneously.
-// Card is inserted as firstChild of lO1IF132jJ1gc9yz2HYvV — before SLS buttons.
+// Dual-display architecture with IN-PLACE DOM updates:
+// 1. Inline Card: Rendered inside the game details action button row (next to Manage / SLS buttons).
+// 2. Global Floating Indicator: Sleek, non-intrusive status pill at bottom-right when navigating elsewhere in Steam.
+//
+// CRITICAL: All DOM nodes (especially buttons) are created ONCE and updated in-place.
+// We NEVER wipe innerHTML on poll cycles so Steam Gamepad Focus nodes and controller
+// selection are preserved 100% seamlessly without jumping or focus loss.
+//
 // Guard flag: window.__slsAccelaProgressInjected
 
 (function () {
@@ -12,10 +18,11 @@
     if (window.__slsAccelaProgressInjected) return;
     window.__slsAccelaProgressInjected = true;
 
-    // ── Constants ─────────────────────────────────────────────────────────────
+    // ── Constants & Configuration ─────────────────────────────────────────────
 
-    var POLL_MS  = 1500;
     var BASE_URL = 'http://127.0.0.1:9001';
+    var POLL_ACTIVE_MS = 1500;
+    var POLL_IDLE_MS   = 3000;
 
     var PHASE_LABELS = {
         'starting':       'Starting…',
@@ -28,95 +35,124 @@
         'idle':           'Idle'
     };
 
-    // ── Shared CSS ────────────────────────────────────────────────────────────
+    // ── Steam Gamepad Focus Node Registration ──────────────────────────────────
+
+    function registerSteamFocusNode(element, properties) {
+        if (!element) return null;
+        if (!properties) properties = { focusable: true };
+        if (!element.hasAttribute('tabindex')) element.setAttribute('tabindex', '-1');
+        element.classList.add('Focusable');
+        var parent = element.parentElement;
+        var parentNode = null;
+        while (parent && parent !== document.body) {
+            var fiberKey = Object.keys(parent).find(function(key) { return key.indexOf('__reactFiber') === 0; });
+            if (fiberKey) {
+                var n = parent[fiberKey];
+                while (n) {
+                    if (n.memoizedProps && n.memoizedProps.node) {
+                        parentNode = n.memoizedProps.node;
+                        break;
+                    }
+                    n = n.return;
+                }
+            }
+            if (parentNode) break;
+            parent = parent.parentElement;
+        }
+        if (!parentNode) return null;
+        try {
+            var NavNodeClass = parentNode.constructor;
+            var newNode = new NavNodeClass(parentNode.m_Tree, parentNode, null);
+            if (newNode.SetProperties) newNode.SetProperties(properties);
+            else newNode.m_Properties = Object.assign(newNode.m_Properties || {}, properties);
+            if (newNode.OnMount) newNode.OnMount(element);
+            return newNode;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    // ── Stylesheet ────────────────────────────────────────────────────────────
 
     function ensureStyles() {
         if (document.getElementById('sls-dl-styles')) return;
         var s = document.createElement('style');
         s.id = 'sls-dl-styles';
         s.textContent = [
-            '.sls-dl-card{',
-            '  display:inline-flex;align-items:center;gap:8px;',
-            '  background:linear-gradient(135deg,#1a1d23 0%,#13151a 100%);',
-            '  border:1px solid rgba(255,255,255,0.08);border-radius:6px;',
-            '  padding:8px 12px;margin-right:8px;min-width:240px;',
-            '  box-shadow:0 2px 12px rgba(0,0,0,0.45);',
-            '  font-family:"Motiva Sans",Arial,sans-serif;',
-            '  vertical-align:middle;',
+            // Inline Card (Inside Game Details Button Row)
+            '.sls-dl-card {',
+            '  display: inline-flex; align-items: center; gap: 8px;',
+            '  background: linear-gradient(135deg, #1b2838 0%, #151a21 100%);',
+            '  border: 1px solid rgba(103, 193, 245, 0.3); border-radius: 4px;',
+            '  padding: 6px 12px; margin-right: 8px; min-width: 250px;',
+            '  height: 48px; box-sizing: border-box;',
+            '  box-shadow: 0 4px 16px rgba(0,0,0,0.5), inset 0 0 12px rgba(103,193,245,0.06);',
+            '  font-family: "Motiva Sans", Arial, sans-serif;',
+            '  vertical-align: middle; z-index: 10;',
+            '  transition: all 0.2s ease;',
             '}',
-            '.sls-dl-icon{flex-shrink:0;animation:sls-spin 1.4s linear infinite;}',
-            '.sls-dl-icon.done{animation:none;}',
-            '.sls-dl-icon.paused{animation:none;opacity:0.6;}',
-            '@keyframes sls-spin{to{transform:rotate(360deg)}}',
-            '.sls-dl-body{display:flex;flex-direction:column;gap:3px;flex:1;min-width:0;}',
-            '.sls-dl-header{display:flex;justify-content:space-between;align-items:baseline;gap:4px;}',
-            '.sls-dl-game{font-size:12px;font-weight:700;color:#c6d4df;',
-            '  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:110px;}',
-            '.sls-dl-pct{font-size:12px;font-weight:700;color:#67c1f5;flex-shrink:0;}',
-            '.sls-dl-track{height:4px;background:rgba(255,255,255,0.1);border-radius:2px;overflow:hidden;}',
-            '.sls-dl-fill{height:100%;border-radius:2px;',
-            '  background:linear-gradient(90deg,#4d9c36,#75b022);',
-            '  transition:width 0.6s ease;will-change:width;}',
-            '.sls-dl-fill.failed{background:#c0392b;}',
-            '.sls-dl-fill.done{background:#4caf50;}',
-            '.sls-dl-fill.paused{background:linear-gradient(90deg,#4a5568,#718096);}',
-            '.sls-dl-meta{display:flex;justify-content:space-between;align-items:center;gap:4px;}',
-            '.sls-dl-phase{font-size:10px;color:#8ba3b8;text-transform:uppercase;letter-spacing:.04em;flex-shrink:0;}',
-            '.sls-dl-speed{font-size:10px;color:#67c1f5;flex-shrink:0;}',
-            '.sls-dl-eta{font-size:10px;color:#5a7a8a;flex-shrink:0;}',
-            // Control buttons row
-            '.sls-dl-controls{display:flex;gap:4px;flex-shrink:0;align-items:center;}',
-            '.sls-dl-btn{background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);',
-            '  color:#9ca3af;cursor:pointer;font-size:11px;line-height:1;padding:3px 6px;',
-            '  border-radius:3px;transition:all 0.15s;white-space:nowrap;}',
-            '.sls-dl-btn:hover{background:rgba(255,255,255,0.12);color:#fff;}',
-            '.sls-dl-btn.pause:hover{background:rgba(250,204,21,0.15);color:#fbbf24;border-color:rgba(251,191,36,0.3);}',
-            '.sls-dl-btn.resume:hover{background:rgba(74,222,128,0.15);color:#4ade80;border-color:rgba(74,222,128,0.3);}',
-            '.sls-dl-btn.cancel:hover{background:rgba(239,68,68,0.15);color:#f87171;border-color:rgba(239,68,68,0.3);}',
-            '.sls-dl-btn:disabled{opacity:0.3;cursor:default;pointer-events:none;}',
+            // Icons & Animations
+            '.sls-dl-icon-wrap, .sls-floating-icon-wrap { flex-shrink: 0; display: flex; align-items: center; justify-content: center; }',
+            '.sls-dl-icon { flex-shrink: 0; animation: sls-spin 1.4s linear infinite; }',
+            '.sls-dl-icon.done { animation: none; }',
+            '.sls-dl-icon.paused { animation: none; opacity: 0.6; }',
+            '@keyframes sls-spin { to { transform: rotate(360deg); } }',
+            '@keyframes sls-slide-up { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }',
+            // Card Content
+            '.sls-dl-body { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }',
+            '.sls-dl-header { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }',
+            '.sls-dl-game { font-size: 12px; font-weight: 700; color: #e1e7ed; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 120px; }',
+            '.sls-dl-pct { font-size: 12px; font-weight: 700; color: #67c1f5; flex-shrink: 0; }',
+            '.sls-dl-track { height: 4px; background: rgba(255,255,255,0.12); border-radius: 2px; overflow: hidden; }',
+            '.sls-dl-fill { height: 100%; border-radius: 2px; background: linear-gradient(90deg, #1a9fff, #00d4ff); transition: width 0.4s ease; will-change: width; }',
+            '.sls-dl-fill.failed { background: #ef4444; }',
+            '.sls-dl-fill.done { background: #10b981; }',
+            '.sls-dl-fill.paused { background: linear-gradient(90deg, #4b5563, #6b7280); }',
+            '.sls-dl-meta { display: flex; justify-content: space-between; align-items: center; gap: 6px; }',
+            '.sls-dl-phase { font-size: 10px; color: #8ba3b8; text-transform: uppercase; letter-spacing: .04em; flex-shrink: 0; }',
+            '.sls-dl-speed { font-size: 10px; color: #67c1f5; font-weight: 600; flex-shrink: 0; }',
+            '.sls-dl-eta { font-size: 10px; color: #94a3b8; flex-shrink: 0; }',
+            // Button Controls (Preserved in DOM across all polls!)
+            '.sls-dl-controls { display: flex; gap: 4px; flex-shrink: 0; align-items: center; margin-left: 2px; }',
+            '.sls-dl-btn { background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15);',
+            '  color: #cbd5e1; cursor: pointer; font-size: 11px; line-height: 1; padding: 4px 8px;',
+            '  border-radius: 3px; transition: all 0.15s ease; white-space: nowrap; outline: none; }',
+            '.sls-dl-btn:hover { background: rgba(255,255,255,0.18); color: #fff; }',
+            '.sls-dl-btn.pause:hover { background: rgba(251,191,36,0.2); color: #fbbf24; border-color: rgba(251,191,36,0.4); }',
+            '.sls-dl-btn.resume:hover { background: rgba(52,211,153,0.2); color: #34d399; border-color: rgba(52,211,153,0.4); }',
+            '.sls-dl-btn.cancel:hover { background: rgba(239,68,68,0.2); color: #f87171; border-color: rgba(239,68,68,0.4); }',
+            '.sls-dl-btn:disabled { opacity: 0.35; cursor: default; pointer-events: none; }',
+            // Floating Mini-Progress Bar (Global Navigation Fallback)
+            '.sls-floating-dl-bar {',
+            '  position: fixed; bottom: 28px; right: 28px; z-index: 999990;',
+            '  display: flex; align-items: center; gap: 12px;',
+            '  background: rgba(20, 25, 34, 0.96);',
+            '  border: 1px solid rgba(103, 193, 245, 0.4);',
+            '  box-shadow: 0 8px 32px rgba(0,0,0,0.7), 0 0 16px rgba(103,193,245,0.15);',
+            '  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);',
+            '  border-radius: 8px; padding: 10px 16px; min-width: 320px; max-width: 440px;',
+            '  font-family: "Motiva Sans", Arial, sans-serif; color: #e2e8f0;',
+            '  animation: sls-slide-up 0.3s cubic-bezier(0.16, 1, 0.3, 1);',
+            '  transition: opacity 0.25s ease, transform 0.25s ease;',
+            '}',
+            '.sls-floating-dl-bar.hiding { opacity: 0; transform: translateY(12px); pointer-events: none; }',
+            '.sls-floating-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }',
+            '.sls-floating-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }',
+            '.sls-floating-title { font-size: 13px; font-weight: 700; color: #f8fafc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }',
+            '.sls-floating-pct { font-size: 13px; font-weight: 700; color: #67c1f5; }',
+            '.sls-floating-sub { display: flex; justify-content: space-between; font-size: 11px; color: #94a3b8; }'
         ].join('');
         document.head.appendChild(s);
     }
+    ensureStyles();
 
-    // ── SVG helpers ───────────────────────────────────────────────────────────
-
-    function spinnerSVG(phase) {
-        var isDone   = phase === 'done';
-        var isFailed = phase === 'failed';
-        var isPaused = phase === 'paused';
-
-        if (isDone)
-            return '<svg class="sls-dl-icon done" width="18" height="18" viewBox="0 0 24 24"'
-                 + ' fill="none" stroke="#4caf50" stroke-width="2.5"'
-                 + ' stroke-linecap="round" stroke-linejoin="round">'
-                 + '<polyline points="20 6 9 17 4 12"/></svg>';
-        if (isFailed)
-            return '<svg class="sls-dl-icon done" width="18" height="18" viewBox="0 0 24 24"'
-                 + ' fill="none" stroke="#e74c3c" stroke-width="2.5"'
-                 + ' stroke-linecap="round" stroke-linejoin="round">'
-                 + '<line x1="18" y1="6" x2="6" y2="18"/>'
-                 + '<line x1="6" y1="6" x2="18" y2="18"/></svg>';
-        if (isPaused)
-            return '<svg class="sls-dl-icon paused" width="18" height="18" viewBox="0 0 24 24"'
-                 + ' fill="none" stroke="#718096" stroke-width="2.5"'
-                 + ' stroke-linecap="round" stroke-linejoin="round">'
-                 + '<rect x="6" y="4" width="4" height="16"/>'
-                 + '<rect x="14" y="4" width="4" height="16"/></svg>';
-        return '<svg class="sls-dl-icon" width="18" height="18" viewBox="0 0 24 24"'
-             + ' fill="none" stroke="#67c1f5" stroke-width="2.5"'
-             + ' stroke-linecap="round" stroke-linejoin="round">'
-             + '<path d="M12 2a10 10 0 0 1 10 10" opacity=".3"/>'
-             + '<path d="M12 2a10 10 0 0 0-10 10 10 10 0 0 0 10 10"/>'
-             + '</svg>';
-    }
+    // ── Formatters & SVG Helpers ──────────────────────────────────────────────
 
     function escHtml(s) {
-        return String(s)
+        return String(s || '')
             .replace(/&/g, '&amp;').replace(/</g, '&lt;')
             .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
-
-    // ── Formatting helpers ────────────────────────────────────────────────────
 
     function formatSpeed(bps) {
         if (!bps || bps <= 0) return '';
@@ -137,246 +173,54 @@
         return h + 'h ' + (m > 0 ? m + 'm' : '');
     }
 
-    // ── Card HTML ─────────────────────────────────────────────────────────────
+    function spinnerSVG(phase, size) {
+        if (!size) size = 18;
+        var isDone   = phase === 'done';
+        var isFailed = phase === 'failed';
+        var isPaused = phase === 'paused';
 
-    function buildCardHTML(gameName, pct, done, total, phase, speedBps, etaSec) {
-        var isDone    = phase === 'done';
-        var isFailed  = phase === 'failed';
-        var isPaused  = phase === 'paused';
-        var isActive  = !isDone && !isFailed;
-
-        var fillClass = isFailed ? 'sls-dl-fill failed'
-                      : isDone   ? 'sls-dl-fill done'
-                      : isPaused ? 'sls-dl-fill paused'
-                      :            'sls-dl-fill';
-
-        var label = PHASE_LABELS[phase] || phase;
-
-        // Speed / ETA — only shown while actively downloading
-        var speedStr = (phase === 'downloading') ? formatSpeed(speedBps) : '';
-        var etaStr   = (phase === 'downloading' && etaSec >= 0) ? formatEta(etaSec) : '';
-
-        // Controls: pause/resume + cancel, only while download is in-flight
-        var controls = '';
-        if (isActive && !isDone && !isFailed) {
-            if (isPaused) {
-                controls = '<div class="sls-dl-controls">'
-                         + '<button class="sls-dl-btn resume" data-sls-resume="1" title="Resume download">&#x25B6; Resume</button>'
-                         + '<button class="sls-dl-btn cancel" data-sls-cancel="1" title="Cancel download">&#x2715; Cancel</button>'
-                         + '</div>';
-            } else {
-                controls = '<div class="sls-dl-controls">'
-                         + '<button class="sls-dl-btn pause" data-sls-pause="1" title="Pause download">&#x23F8; Pause</button>'
-                         + '<button class="sls-dl-btn cancel" data-sls-cancel="1" title="Cancel download">&#x2715; Cancel</button>'
-                         + '</div>';
-            }
-        }
-
-        return spinnerSVG(phase)
-             + '<div class="sls-dl-body">'
-             +   '<div class="sls-dl-header">'
-             +     '<span class="sls-dl-game" title="' + escHtml(gameName) + '">' + escHtml(gameName) + '</span>'
-             +     '<span class="sls-dl-pct">' + pct + '%</span>'
-             +   '</div>'
-             +   '<div class="sls-dl-track"><div class="' + fillClass + '" style="width:' + pct + '%"></div></div>'
-             +   '<div class="sls-dl-meta">'
-             +     '<span class="sls-dl-phase">' + label + (total > 0 ? ' · ' + done + '/' + total : '') + '</span>'
-             +     (speedStr ? '<span class="sls-dl-speed">' + speedStr + '</span>' : '')
-             +     (etaStr   ? '<span class="sls-dl-eta">~' + etaStr + '</span>' : '')
-             +   '</div>'
-             + '</div>'
-             + controls;
+        if (isDone)
+            return '<svg class="sls-dl-icon done" width="' + size + '" height="' + size + '" viewBox="0 0 24 24"'
+                 + ' fill="none" stroke="#10b981" stroke-width="2.5"'
+                 + ' stroke-linecap="round" stroke-linejoin="round">'
+                 + '<polyline points="20 6 9 17 4 12"/></svg>';
+        if (isFailed)
+            return '<svg class="sls-dl-icon done" width="' + size + '" height="' + size + '" viewBox="0 0 24 24"'
+                 + ' fill="none" stroke="#ef4444" stroke-width="2.5"'
+                 + ' stroke-linecap="round" stroke-linejoin="round">'
+                 + '<line x1="18" y1="6" x2="6" y2="18"/>'
+                 + '<line x1="6" y1="6" x2="18" y2="18"/></svg>';
+        if (isPaused)
+            return '<svg class="sls-dl-icon paused" width="' + size + '" height="' + size + '" viewBox="0 0 24 24"'
+                 + ' fill="none" stroke="#94a3b8" stroke-width="2.5"'
+                 + ' stroke-linecap="round" stroke-linejoin="round">'
+                 + '<rect x="6" y="4" width="4" height="16"/>'
+                 + '<rect x="14" y="4" width="4" height="16"/></svg>';
+        return '<svg class="sls-dl-icon" width="' + size + '" height="' + size + '" viewBox="0 0 24 24"'
+             + ' fill="none" stroke="#67c1f5" stroke-width="2.5"'
+             + ' stroke-linecap="round" stroke-linejoin="round">'
+             + '<path d="M12 2a10 10 0 0 1 10 10" opacity=".3"/>'
+             + '<path d="M12 2a10 10 0 0 0-10 10 10 10 0 0 0 10 10"/>'
+             + '</svg>';
     }
 
-    function applyData(cardEl, data) {
-        var pct      = Math.max(0, Math.min(100, data.percent || 0));
-        var phase    = data.phase || 'idle';
-        var name     = data.gameName || cardEl.dataset.slsGameName || ('AppID ' + cardEl.dataset.slsAppId);
-        if (data.gameName) cardEl.dataset.slsGameName = data.gameName;
+    // ── AppID Extraction from Steam DOM ───────────────────────────────────────
 
-        cardEl.innerHTML = buildCardHTML(
-            name, pct,
-            data.depotsDone || 0,
-            data.depotsTotal || 0,
-            phase,
-            data.speedBps || 0,
-            data.etaSec != null ? data.etaSec : -1
-        );
-
-        var appid = cardEl.dataset.slsAppId;
-
-        // Wire pause button
-        var pauseBtn = cardEl.querySelector('[data-sls-pause]');
-        if (pauseBtn) {
-            pauseBtn.addEventListener('click', function(e) {
-                e.stopPropagation();
-                pauseBtn.disabled = true;
-                fetch(BASE_URL + '/pause?id=' + appid).catch(function() {});
-            });
-        }
-
-        // Wire resume button
-        var resumeBtn = cardEl.querySelector('[data-sls-resume]');
-        if (resumeBtn) {
-            resumeBtn.addEventListener('click', function(e) {
-                e.stopPropagation();
-                resumeBtn.disabled = true;
-                fetch(BASE_URL + '/resume?id=' + appid).catch(function() {});
-            });
-        }
-
-        // Wire cancel button
-        var cancelBtn = cardEl.querySelector('[data-sls-cancel]');
-        if (cancelBtn) {
-            cancelBtn.addEventListener('click', function(e) {
-                e.stopPropagation();
-                cancelBtn.disabled = true;
-                fetch(BASE_URL + '/cancel?id=' + appid).catch(function() {});
-            });
-        }
-    }
-
-    // ── Per-container tracking ────────────────────────────────────────────────
-    // Key: a random string stamped on each lO1IF132jJ1gc9yz2HYvV node
-    // Value: { appid, cardEl, timerId, failCount, done }
-
-    var tracked = {};   // containerKey → state
-    var inFlight = {};  // containerKey → true (pending /check)
-    var recentlyChecked = {};  // appid → timestamp (to prevent spamming /check after download ends)
-    var notDownloading = {};   // appid → true  (confirmed not downloading; skip until page reload)
-
-    function containerKey(node) {
-        if (!node.dataset.slsDlKey)
-            node.dataset.slsDlKey = Math.random().toString(36).slice(2);
-        return node.dataset.slsDlKey;
-    }
-
-    // Insert / ensure card is firstChild of buttonRow
-    function ensureCard(buttonRow, appid, gameName) {
-        var key  = containerKey(buttonRow);
-        var info = tracked[key];
-
-        // Card element already exists in this container
-        if (info && info.cardEl && info.cardEl.parentNode === buttonRow)
-            return info.cardEl;
-
-        ensureStyles();
-        var card = document.createElement('div');
-        card.className         = 'sls-dl-card';
-        card.dataset.slsAppId  = appid;
-        card.dataset.slsGameName = gameName || '';
-        card.innerHTML = buildCardHTML(gameName || ('AppID ' + appid), 0, 0, 0, 'starting', 0, -1);
-
-        // Insert FIRST — before all SLS buttons and Steam buttons
-        buttonRow.insertBefore(card, buttonRow.firstChild);
-
-        if (!tracked[key]) tracked[key] = { appid: appid, cardEl: card, timerId: null, failCount: 0, done: false };
-        else tracked[key].cardEl = card;
-
-        return card;
-    }
-
-    function removeCardsForAppid(appid) {
-        // Remove card from every tracked container for this appid
-        Object.keys(tracked).forEach(function (key) {
-            var info = tracked[key];
-            if (info.appid !== appid) return;
-            if (info.timerId) clearTimeout(info.timerId);
-            if (info.cardEl && info.cardEl.parentNode) {
-                info.cardEl.style.transition = 'opacity 0.4s';
-                info.cardEl.style.opacity    = '0';
-                var el = info.cardEl;
-                setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 420);
-            }
-            delete tracked[key];
-        });
-    }
-
-    // ── Poll loop (shared — one timer per appid, updates all containers) ──────
-
-    var pollTimers = {};  // appid → timer id
-
-    function schedulePoll(appid) {
-        if (pollTimers[appid]) return;
-        pollTimers[appid] = setTimeout(function () {
-            delete pollTimers[appid];
-            doPoll(appid);
-        }, POLL_MS);
-    }
-
-    function doPoll(appid) {
-        // Abort if no containers are still tracking this appid
-        var anyAlive = Object.keys(tracked).some(function (k) {
-            return tracked[k].appid === appid;
-        });
-        if (!anyAlive) return;
-
-        fetch(BASE_URL + '/progress?id=' + appid)
-            .then(function (r) { return r.json(); })
-            .then(function (data) {
-                var isDone   = data.phase === 'done';
-                var isFailed = data.phase === 'failed';
-
-                // Update every live card for this appid
-                Object.keys(tracked).forEach(function (key) {
-                    var info = tracked[key];
-                    if (info.appid !== appid) return;
-                    info.failCount = 0;
-                    // Re-ensure card is still in its container (handles React re-renders)
-                    if (!info.cardEl || !info.cardEl.parentNode) {
-                        var row = document.querySelector('[data-sls-dl-key="' + key + '"]');
-                        if (row) info.cardEl = ensureCard(row, appid, data.gameName || '');
-                    }
-                    if (info.cardEl) applyData(info.cardEl, data);
-                });
-
-                if (isDone || isFailed) {
-                    // Mark this appid as recently checked — don't spam /check for 60s
-                    recentlyChecked[appid] = Date.now();
-                    delete notDownloading[appid];
-                    setTimeout(function () {
-                        removeCardsForAppid(appid);
-                        // Reset app-details injection flag so buttons re-appear
-                        document.querySelectorAll('[data-sls-injected="' + appid + '"]')
-                            .forEach(function (el) { delete el.dataset.slsInjected; });
-                    }, 2500);
-                    return;
-                }
-
-                schedulePoll(appid);
-            })
-            .catch(function () {
-                var anyAlive2 = false;
-                Object.keys(tracked).forEach(function (key) {
-                    if (tracked[key].appid !== appid) return;
-                    tracked[key].failCount = (tracked[key].failCount || 0) + 1;
-                    if (tracked[key].failCount < 10) anyAlive2 = true;
-                    else {
-                        if (tracked[key].cardEl && tracked[key].cardEl.parentNode)
-                            tracked[key].cardEl.parentNode.removeChild(tracked[key].cardEl);
-                        delete tracked[key];
-                    }
-                });
-                if (anyAlive2) schedulePoll(appid);
-            });
-    }
-
-    // ── DOM scanner ───────────────────────────────────────────────────────────
-
-    function extractAppId(manageBtn) {
+    function extractAppId(elem) {
         var appid = null;
-        var curr  = manageBtn;
+        var curr  = elem;
         while (curr && curr !== document.body) {
             var cls = (typeof curr.className === 'string') ? curr.className : '';
             var m = cls.match(/\bapp_([0-9]+)\b/);
             if (m) { appid = m[1]; break; }
-            var da = curr.getAttribute('data-appid');
+            var da = curr.getAttribute('data-appid') || curr.getAttribute('data-sls-appid');
             if (da) { appid = da; break; }
             curr = curr.parentElement;
         }
+
         if (!appid) {
             try {
-                curr = manageBtn;
+                curr = elem;
                 while (curr && curr !== document.body && !appid) {
                     for (var k in curr) {
                         if (k.startsWith('__reactInternalInstance$') || k.startsWith('__reactFiber$')) {
@@ -397,114 +241,515 @@
                 }
             } catch(e) {}
         }
+
         if (!appid) {
             var match = window.location.href.match(/\/app\/([0-9]+)/);
             if (match) appid = match[1];
+            else {
+                match = window.location.hash.match(/\/app\/([0-9]+)/);
+                if (match) appid = match[1];
+            }
         }
         return appid;
     }
 
-    function scanForDownloads() {
-        document.querySelectorAll('div[aria-label="Manage"]').forEach(function (manageBtn) {
-            var manageContainer = manageBtn.parentNode;
-            if (!manageContainer) return;
+    function findActionRow() {
+        var manageBtn = document.querySelector('div[aria-label="Manage"], div[aria-label="Configure Controller"]');
+        if (manageBtn && manageBtn.parentNode) {
+            return manageBtn.parentNode.parentNode;
+        }
+        return document.querySelector('div._1thLDT_28YIf6OkgIb6n-4');
+    }
 
-            // buttonRow = lO1IF132jJ1gc9yz2HYvV
-            var buttonRow = manageContainer.parentNode;
-            if (!buttonRow) return;
+    // ── Stable Inline Card Management (In-Place Updates) ──────────────────────
 
-            var appid = extractAppId(manageBtn);
-            if (!appid) return;
-
-            // Must declare now before any use of it below.
-            var now = Date.now();
-
-            // Skip if confirmed not-downloading, but only for a short window (15s).
-            // Long enough to avoid hammering /check on every 3s tick, but short
-            // enough that a download starting shortly after is still caught quickly.
-            // If the user interacted recently (< 3s), bypass this cache to give instant feedback.
-            var recentlyInteracted = (now - lastInteractionTime) < 3000;
-            if (!recentlyInteracted && notDownloading[appid] && (now - notDownloading[appid]) < 15000) return;
-
-            // Skip if we recently checked this appid after a completed/failed download
-            // (60s cooldown set by doPoll when isDone/isFailed).
-            if (recentlyChecked[appid] && (now - recentlyChecked[appid]) < 60000) {
-                return;
+    function ensureInlineCard(actionRow, appid) {
+        var card = actionRow.querySelector('.sls-dl-card[data-sls-app-id="' + appid + '"]');
+        if (card && card.parentElement === actionRow) {
+            if (actionRow.firstChild !== card) {
+                actionRow.insertBefore(card, actionRow.firstChild);
             }
+            return card;
+        }
 
-            var key = containerKey(buttonRow);
+        ensureStyles();
+        card = document.createElement('div');
+        card.className = 'sls-dl-card';
+        card.dataset.slsAppId = appid;
 
-            // Already tracking this container for this appid
-            if (tracked[key] && tracked[key].appid === appid) {
-                // Ensure card is still firstChild (React may have re-rendered)
-                var info = tracked[key];
-                if (!info.cardEl || !info.cardEl.parentNode) {
-                    info.cardEl = ensureCard(buttonRow, appid, info.gameName || '');
-                } else if (info.cardEl.parentNode === buttonRow &&
-                           buttonRow.firstChild !== info.cardEl) {
-                    // Card drifted — move back to front
-                    buttonRow.insertBefore(info.cardEl, buttonRow.firstChild);
-                }
-                return;
-            }
+        card.innerHTML = [
+            '<div class="sls-dl-icon-wrap"></div>',
+            '<div class="sls-dl-body">',
+            '  <div class="sls-dl-header">',
+            '    <span class="sls-dl-game"></span>',
+            '    <span class="sls-dl-pct"></span>',
+            '  </div>',
+            '  <div class="sls-dl-track"><div class="sls-dl-fill"></div></div>',
+            '  <div class="sls-dl-meta">',
+            '    <span class="sls-dl-phase"></span>',
+            '    <span class="sls-dl-speed"></span>',
+            '    <span class="sls-dl-eta"></span>',
+            '  </div>',
+            '</div>',
+            '<div class="sls-dl-controls">',
+            '  <button class="sls-dl-btn sls-btn-toggle pause Focusable" tabindex="-1">&#x23F8; Pause</button>',
+            '  <button class="sls-dl-btn sls-btn-cancel cancel Focusable" tabindex="-1">&#x2715; Cancel</button>',
+            '</div>'
+        ].join('');
 
-            // Skip if a /check is in-flight for this container
-            if (inFlight[key]) return;
-            inFlight[key] = true;
+        actionRow.insertBefore(card, actionRow.firstChild);
 
-            fetch(BASE_URL + '/check?id=' + appid)
-                .then(function (r) { return r.json(); })
-                .then(function (data) {
-                    delete inFlight[key];
-                    if (!data.downloading) {
-                        // Suppress re-checks for 15s when confirmed idle.
-                        notDownloading[appid] = Date.now();
-                        return;
-                    }
-                    // Download is active — clear the idle suppression.
-                    delete notDownloading[appid];
+        // Wire button events and Steam Gamepad focus ONCE at mount time
+        var toggleBtn = card.querySelector('.sls-btn-toggle');
+        var cancelBtn = card.querySelector('.sls-btn-cancel');
 
-                    // Create card in this container
-                    var card = ensureCard(buttonRow, appid, '');
-                    tracked[key] = { appid: appid, cardEl: card, timerId: null, failCount: 0, done: false };
+        toggleBtn.onclick = function (e) {
+            e.preventDefault(); e.stopPropagation();
+            toggleBtn.disabled = true;
+            var isCurrentlyPaused = toggleBtn.classList.contains('resume');
+            var endpoint = isCurrentlyPaused ? '/resume?id=' : '/pause?id=';
+            fetch(BASE_URL + endpoint + appid).catch(function () {});
+            setTimeout(syncDownloads, 200);
+        };
 
-                    // Fetch initial progress for game name + speed/ETA
-                    fetch(BASE_URL + '/progress?id=' + appid)
-                        .then(function (r2) { return r2.json(); })
-                        .then(function (d2) {
-                            if (tracked[key]) {
-                                tracked[key].gameName = d2.gameName || '';
-                                applyData(card, d2);
-                            }
-                        })
-                        .catch(function () {});
+        cancelBtn.onclick = function (e) {
+            e.preventDefault(); e.stopPropagation();
+            cancelBtn.disabled = true;
+            fetch(BASE_URL + '/cancel?id=' + appid).catch(function () {});
+            setTimeout(syncDownloads, 300);
+        };
 
-                    schedulePoll(appid);
-                })
-                .catch(function () { delete inFlight[key]; });
+        [toggleBtn, cancelBtn].forEach(function (b) {
+            registerSteamFocusNode(b);
+            b.addEventListener('vgp_onfocus', function () { b.style.outline = '2px solid white'; b.style.outlineOffset = '2px'; });
+            b.addEventListener('vgp_onblur',  function () { b.style.outline = 'none'; });
+            b.addEventListener('vgp_onok',    function (e) { e.preventDefault(); e.stopPropagation(); b.click(); });
         });
+
+        return card;
     }
 
-    // ── Boot ──────────────────────────────────────────────────────────────────
+    function updateInlineCard(card, dl) {
+        var pct      = Math.max(0, Math.min(100, dl.percent || 0));
+        var phase    = dl.phase || 'downloading';
+        var isPaused = phase === 'paused' || dl.paused;
+        var isDone   = phase === 'done';
+        var isFailed = phase === 'failed';
+        var name     = dl.gameName || ('App ' + dl.appId);
 
-    var scanRaf = null;
-    function debouncedScan() {
-        if (scanRaf) return;
-        scanRaf = requestAnimationFrame(function () { scanRaf = null; scanForDownloads(); });
+        // 1. Icon (only update innerHTML if phase changed)
+        var iconWrap = card.querySelector('.sls-dl-icon-wrap');
+        if (iconWrap && card.dataset.lastPhase !== phase) {
+            iconWrap.innerHTML = spinnerSVG(phase, 18);
+            card.dataset.lastPhase = phase;
+        }
+
+        // 2. Title & Percentage in-place
+        var titleEl = card.querySelector('.sls-dl-game');
+        if (titleEl && titleEl.textContent !== name) {
+            titleEl.textContent = name;
+            titleEl.title = name;
+        }
+
+        var pctEl = card.querySelector('.sls-dl-pct');
+        var pctText = pct + '%';
+        if (pctEl && pctEl.textContent !== pctText) {
+            pctEl.textContent = pctText;
+        }
+
+        // 3. Track fill width & class in-place
+        var fillEl = card.querySelector('.sls-dl-fill');
+        if (fillEl) {
+            var fillClass = isFailed ? 'sls-dl-fill failed'
+                          : isDone   ? 'sls-dl-fill done'
+                          : isPaused ? 'sls-dl-fill paused'
+                          :            'sls-dl-fill';
+            if (fillEl.className !== fillClass) fillEl.className = fillClass;
+            fillEl.style.width = pct + '%';
+        }
+
+        // 4. Meta text (phase, speed, ETA) in-place
+        var phaseEl = card.querySelector('.sls-dl-phase');
+        if (phaseEl) {
+            var label = (PHASE_LABELS[phase] || phase) + (dl.depotsTotal > 0 ? ' · ' + (dl.depotsDone || 0) + '/' + dl.depotsTotal : '');
+            if (phaseEl.textContent !== label) phaseEl.textContent = label;
+        }
+
+        var speedEl = card.querySelector('.sls-dl-speed');
+        if (speedEl) {
+            var speedStr = (phase === 'downloading' && !isPaused) ? formatSpeed(dl.speedBps) : '';
+            if (speedEl.textContent !== speedStr) speedEl.textContent = speedStr;
+            speedEl.style.display = speedStr ? 'inline' : 'none';
+        }
+
+        var etaEl = card.querySelector('.sls-dl-eta');
+        if (etaEl) {
+            var etaStr = (phase === 'downloading' && !isPaused && dl.etaSec >= 0) ? '~' + formatEta(dl.etaSec) : '';
+            if (etaEl.textContent !== etaStr) etaEl.textContent = etaStr;
+            etaEl.style.display = etaStr ? 'inline' : 'none';
+        }
+
+        // 5. Controls: update button text/classes in-place without destroying DOM elements!
+        // This keeps Steam gamepad focus node active on whichever button the user is focusing!
+        var toggleBtn = card.querySelector('.sls-btn-toggle');
+        if (toggleBtn) {
+            if (isDone || isFailed) {
+                toggleBtn.style.display = 'none';
+            } else {
+                toggleBtn.style.display = 'inline-block';
+                toggleBtn.disabled = false;
+                if (isPaused) {
+                    if (!toggleBtn.classList.contains('resume')) {
+                        toggleBtn.innerHTML = '&#x25B6; Resume';
+                        toggleBtn.className = 'sls-dl-btn sls-btn-toggle resume Focusable';
+                        toggleBtn.title = 'Resume download';
+                    }
+                } else {
+                    if (!toggleBtn.classList.contains('pause')) {
+                        toggleBtn.innerHTML = '&#x23F8; Pause';
+                        toggleBtn.className = 'sls-dl-btn sls-btn-toggle pause Focusable';
+                        toggleBtn.title = 'Pause download';
+                    }
+                }
+            }
+        }
+
+        var cancelBtn = card.querySelector('.sls-btn-cancel');
+        if (cancelBtn) {
+            if (isDone || isFailed) {
+                cancelBtn.style.display = 'none';
+            } else {
+                cancelBtn.style.display = 'inline-block';
+                cancelBtn.disabled = false;
+            }
+        }
     }
 
-    var lastInteractionTime = 0;
-    document.addEventListener('mousedown', function () {
+    // ── Stable Floating Global Progress Bar (In-Place Updates) ────────────────
+
+    function ensureFloatingBar(appid) {
+        var bar = document.getElementById('sls-floating-dl-bar');
+        if (bar) return bar;
+
+        ensureStyles();
+        bar = document.createElement('div');
+        bar.id = 'sls-floating-dl-bar';
+        bar.className = 'sls-floating-dl-bar';
+
+        bar.innerHTML = [
+            '<div class="sls-floating-icon-wrap"></div>',
+            '<div class="sls-floating-body">',
+            '  <div class="sls-floating-top">',
+            '    <span class="sls-floating-title"></span>',
+            '    <span class="sls-floating-pct"></span>',
+            '  </div>',
+            '  <div class="sls-dl-track"><div class="sls-dl-fill"></div></div>',
+            '  <div class="sls-floating-sub">',
+            '    <span class="sls-floating-phase"></span>',
+            '    <span class="sls-floating-meta"></span>',
+            '  </div>',
+            '</div>',
+            '<div class="sls-dl-controls">',
+            '  <button class="sls-dl-btn sls-btn-toggle pause Focusable" tabindex="-1">&#x23F8; Pause</button>',
+            '  <button class="sls-dl-btn sls-btn-cancel cancel Focusable" tabindex="-1">&#x2715; Cancel</button>',
+            '</div>'
+        ].join('');
+
+        document.body.appendChild(bar);
+
+        var toggleBtn = bar.querySelector('.sls-btn-toggle');
+        var cancelBtn = bar.querySelector('.sls-btn-cancel');
+
+        toggleBtn.onclick = function (e) {
+            e.preventDefault(); e.stopPropagation();
+            toggleBtn.disabled = true;
+            var currentId = bar.dataset.slsAppId;
+            var isCurrentlyPaused = toggleBtn.classList.contains('resume');
+            var endpoint = isCurrentlyPaused ? '/resume?id=' : '/pause?id=';
+            fetch(BASE_URL + endpoint + currentId).catch(function () {});
+            setTimeout(syncDownloads, 200);
+        };
+
+        cancelBtn.onclick = function (e) {
+            e.preventDefault(); e.stopPropagation();
+            cancelBtn.disabled = true;
+            var currentId = bar.dataset.slsAppId;
+            fetch(BASE_URL + '/cancel?id=' + currentId).catch(function () {});
+            setTimeout(syncDownloads, 300);
+        };
+
+        [toggleBtn, cancelBtn].forEach(function (b) {
+            registerSteamFocusNode(b);
+            b.addEventListener('vgp_onfocus', function () { b.style.outline = '2px solid white'; b.style.outlineOffset = '2px'; });
+            b.addEventListener('vgp_onblur',  function () { b.style.outline = 'none'; });
+            b.addEventListener('vgp_onok',    function (e) { e.preventDefault(); e.stopPropagation(); b.click(); });
+        });
+
+        return bar;
+    }
+
+    function updateFloatingBar(primaryDl) {
+        var floatingEl = document.getElementById('sls-floating-dl-bar');
+        if (!primaryDl) {
+            if (floatingEl) {
+                floatingEl.classList.add('hiding');
+                setTimeout(function () {
+                    if (floatingEl && floatingEl.parentNode) floatingEl.parentNode.removeChild(floatingEl);
+                }, 260);
+            }
+            return;
+        }
+
+        floatingEl = ensureFloatingBar(primaryDl.appId);
+        floatingEl.classList.remove('hiding');
+        floatingEl.dataset.slsAppId = primaryDl.appId;
+
+        var pct      = Math.max(0, Math.min(100, primaryDl.percent || 0));
+        var phase    = primaryDl.phase || 'downloading';
+        var isPaused = phase === 'paused' || primaryDl.paused;
+        var name     = primaryDl.gameName || ('App ' + primaryDl.appId);
+        var label    = PHASE_LABELS[phase] || phase;
+        var speedStr = (phase === 'downloading' && !isPaused) ? formatSpeed(primaryDl.speedBps) : '';
+        var etaStr   = (phase === 'downloading' && !isPaused && primaryDl.etaSec >= 0) ? formatEta(primaryDl.etaSec) : '';
+
+        // 1. Icon
+        var iconWrap = floatingEl.querySelector('.sls-floating-icon-wrap');
+        if (iconWrap && floatingEl.dataset.lastPhase !== phase) {
+            iconWrap.innerHTML = spinnerSVG(phase, 22);
+            floatingEl.dataset.lastPhase = phase;
+        }
+
+        // 2. Title & Percentage
+        var titleEl = floatingEl.querySelector('.sls-floating-title');
+        if (titleEl && titleEl.textContent !== name) {
+            titleEl.textContent = name;
+            titleEl.title = name;
+        }
+
+        var pctEl = floatingEl.querySelector('.sls-floating-pct');
+        var pctText = pct + '%';
+        if (pctEl && pctEl.textContent !== pctText) {
+            pctEl.textContent = pctText;
+        }
+
+        // 3. Track Fill
+        var fillEl = floatingEl.querySelector('.sls-dl-fill');
+        if (fillEl) {
+            var fillClass = (phase === 'failed') ? 'sls-dl-fill failed'
+                          : (phase === 'done')   ? 'sls-dl-fill done'
+                          : isPaused             ? 'sls-dl-fill paused'
+                          :                        'sls-dl-fill';
+            if (fillEl.className !== fillClass) fillEl.className = fillClass;
+            fillEl.style.width = pct + '%';
+        }
+
+        // 4. Sub labels
+        var phaseEl = floatingEl.querySelector('.sls-floating-phase');
+        if (phaseEl) {
+            var phaseText = label + (primaryDl.depotsTotal > 0 ? ' (' + (primaryDl.depotsDone || 0) + '/' + primaryDl.depotsTotal + ')' : '');
+            if (phaseEl.textContent !== phaseText) phaseEl.textContent = phaseText;
+        }
+
+        var metaEl = floatingEl.querySelector('.sls-floating-meta');
+        if (metaEl) {
+            var metaText = (speedStr ? speedStr + ' ' : '') + (etaStr ? '~' + etaStr : '');
+            if (metaEl.textContent !== metaText) metaEl.textContent = metaText;
+        }
+
+        // 5. Controls updated in-place!
+        var toggleBtn = floatingEl.querySelector('.sls-btn-toggle');
+        if (toggleBtn) {
+            if (phase === 'done' || phase === 'failed') {
+                toggleBtn.style.display = 'none';
+            } else {
+                toggleBtn.style.display = 'inline-block';
+                toggleBtn.disabled = false;
+                if (isPaused) {
+                    if (!toggleBtn.classList.contains('resume')) {
+                        toggleBtn.innerHTML = '&#x25B6; Resume';
+                        toggleBtn.className = 'sls-dl-btn sls-btn-toggle resume Focusable';
+                        toggleBtn.title = 'Resume download';
+                    }
+                } else {
+                    if (!toggleBtn.classList.contains('pause')) {
+                        toggleBtn.innerHTML = '&#x23F8; Pause';
+                        toggleBtn.className = 'sls-dl-btn sls-btn-toggle pause Focusable';
+                        toggleBtn.title = 'Pause download';
+                    }
+                }
+            }
+        }
+
+        var cancelBtn = floatingEl.querySelector('.sls-btn-cancel');
+        if (cancelBtn) {
+            if (phase === 'done' || phase === 'failed') {
+                cancelBtn.style.display = 'none';
+            } else {
+                cancelBtn.style.display = 'inline-block';
+                cancelBtn.disabled = false;
+            }
+        }
+    }
+
+    // ── State & Polling ───────────────────────────────────────────────────────
+
+    var activeDownloads = {}; // appid → downloadData
+    var notDownloading  = {}; // appid → timestamp (cooldown)
+    var pollTimer       = null;
+    var lastInteractionTime = Date.now();
+
+    function updateInteraction() {
         lastInteractionTime = Date.now();
-        // The backend takes a few milliseconds to write the JSON after the Steam Install button is clicked.
-        // We schedule a few staggered checks to ensure we catch it immediately for instant UI feedback.
-        setTimeout(debouncedScan, 100);
-        setTimeout(debouncedScan, 500);
-        setTimeout(debouncedScan, 1500);
-    }, { capture: true, passive: true });
+        notDownloading = {}; // Clear suppression on user interaction
+        debouncedSync();
+    }
 
-    new MutationObserver(debouncedScan).observe(document.body, { childList: true, subtree: true });
-    scanForDownloads();
-    setInterval(scanForDownloads, 3000);
+    ['mousedown', 'keydown', 'pointerdown', 'touchstart'].forEach(function(evt) {
+        document.addEventListener(evt, updateInteraction, { capture: true, passive: true });
+    });
+    window.addEventListener('vgp_onok', updateInteraction, true);
+    window.addEventListener('vgp_ondirection', updateInteraction, true);
+
+    // Cross-script notification
+    window.addEventListener('sls-download-started', function (e) {
+        var id = (e && e.detail && e.detail.appid) ? String(e.detail.appid) : null;
+        if (id) {
+            delete notDownloading[id];
+            delete activeDownloads[id];
+        }
+        updateInteraction();
+        setTimeout(syncDownloads, 100);
+        setTimeout(syncDownloads, 400);
+        setTimeout(syncDownloads, 1200);
+    });
+
+    window.addEventListener('message', function (e) {
+        if (e && e.data && e.data.type === 'sls-download-started') {
+            var id = String(e.data.appid);
+            delete notDownloading[id];
+            updateInteraction();
+            setTimeout(syncDownloads, 100);
+            setTimeout(syncDownloads, 400);
+        }
+    });
+
+    // ── Main Synchronization Logic ────────────────────────────────────────────
+
+    var syncInProgress = false;
+
+    function syncDownloads() {
+        if (syncInProgress) return;
+        syncInProgress = true;
+
+        fetch(BASE_URL + '/active-downloads')
+            .then(function (r) {
+                if (!r.ok) throw new Error('Endpoint not available');
+                return r.json();
+            })
+            .then(function (dlList) {
+                processActiveDownloads(Array.isArray(dlList) ? dlList : []);
+            })
+            .catch(function () {
+                // Fallback for older binary or when /active-downloads is unavailable
+                var row = findActionRow();
+                var currentAppId = row ? extractAppId(row) : null;
+                if (!currentAppId) {
+                    processActiveDownloads([]);
+                    return;
+                }
+
+                var now = Date.now();
+                var recentlyInteracted = (now - lastInteractionTime) < 4000;
+                if (!recentlyInteracted && notDownloading[currentAppId] && (now - notDownloading[currentAppId]) < 4000) {
+                    processActiveDownloads([]);
+                    return;
+                }
+
+                fetch(BASE_URL + '/check?id=' + currentAppId)
+                    .then(function (r) { return r.json(); })
+                    .then(function (checkData) {
+                        if (checkData.downloading) {
+                            fetch(BASE_URL + '/progress?id=' + currentAppId)
+                                .then(function (pr) { return pr.json(); })
+                                .then(function (progData) {
+                                    progData.appId = currentAppId;
+                                    progData.paused = checkData.paused || (progData.phase === 'paused');
+                                    processActiveDownloads([progData]);
+                                })
+                                .catch(function () { processActiveDownloads([]); });
+                        } else {
+                            notDownloading[currentAppId] = Date.now();
+                            processActiveDownloads([]);
+                        }
+                    })
+                    .catch(function () { processActiveDownloads([]); });
+            });
+    }
+
+    function processActiveDownloads(downloads) {
+        syncInProgress = false;
+
+        var newActiveMap = {};
+        downloads.forEach(function (d) {
+            if (d && d.appId) newActiveMap[String(d.appId)] = d;
+        });
+        activeDownloads = newActiveMap;
+
+        var actionRow = findActionRow();
+        var currentAppId = actionRow ? extractAppId(actionRow) : null;
+        var hasVisibleInlineCard = false;
+
+        // 1. Sync Inline Card on Game Details page
+        if (actionRow && currentAppId && activeDownloads[currentAppId]) {
+            var dl = activeDownloads[currentAppId];
+            var card = ensureInlineCard(actionRow, currentAppId);
+            updateInlineCard(card, dl);
+            hasVisibleInlineCard = true;
+        } else {
+            // Remove any obsolete inline cards
+            document.querySelectorAll('.sls-dl-card').forEach(function (c) {
+                var cId = c.dataset.slsAppId;
+                if (!cId || !activeDownloads[cId]) {
+                    c.style.transition = 'opacity 0.25s ease';
+                    c.style.opacity = '0';
+                    setTimeout(function () {
+                        if (c.parentNode) c.parentNode.removeChild(c);
+                    }, 250);
+                }
+            });
+        }
+
+        // 2. Sync Floating Global Progress Indicator
+        var downloadIds = Object.keys(activeDownloads);
+        if (downloadIds.length > 0 && !hasVisibleInlineCard) {
+            updateFloatingBar(activeDownloads[downloadIds[0]]);
+        } else {
+            updateFloatingBar(null);
+        }
+
+        scheduleNextPoll(downloadIds.length > 0);
+    }
+
+    function scheduleNextPoll(hasActive) {
+        if (pollTimer) clearTimeout(pollTimer);
+        var interval = hasActive ? POLL_ACTIVE_MS : POLL_IDLE_MS;
+        pollTimer = setTimeout(syncDownloads, interval);
+    }
+
+    // ── Debounced Scan on DOM Mutation ────────────────────────────────────────
+
+    var debouncedTimer = null;
+    function debouncedSync() {
+        if (debouncedTimer) clearTimeout(debouncedTimer);
+        debouncedTimer = setTimeout(syncDownloads, 80);
+    }
+
+    var observer = new MutationObserver(debouncedSync);
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    // Initial immediate sync
+    syncDownloads();
+    setTimeout(syncDownloads, 500);
+    setTimeout(syncDownloads, 1500);
 
 })();

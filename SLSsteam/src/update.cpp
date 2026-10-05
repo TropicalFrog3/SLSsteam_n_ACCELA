@@ -6,6 +6,7 @@
 #include "log.hpp"
 #include "utils.hpp"
 #include "version.hpp"
+#include "atomic_file.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -114,11 +115,10 @@ void Updater::saveToCache(const std::string yaml)
 {
 	const auto path = Updater::getCacheFilePath();
 
-	std::ofstream stream = std::ofstream(path.c_str());
-	stream << yaml;
-	stream.close();
-
-	LOG_DEBUG("Cached res/updates.yaml!\n");
+	if (AtomicFile::write(path, yaml))
+	{
+		LOG_DEBUG("Cached res/updates.yaml!\n");
+	}
 }
 
 std::string Updater::loadFromCache()

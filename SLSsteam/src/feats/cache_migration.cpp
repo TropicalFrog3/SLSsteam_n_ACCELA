@@ -1,5 +1,6 @@
 #include "cache_migration.hpp"
 #include "../log.hpp"
+#include "../atomic_file.hpp"
 
 #include <yaml-cpp/yaml.h>
 #include <chrono>
@@ -220,17 +221,7 @@ bool CacheMigration::migrate(const std::string& diffYamlPath, const std::string&
         }
 
         // Atomically write updated cache version
-        std::error_code verEc;
-        std::filesystem::create_directories(std::filesystem::path(resolvedVerPath).parent_path(), verEc);
-        std::string tmpVerPath = resolvedVerPath + ".tmp";
-        std::ofstream vf(tmpVerPath);
-        if (vf.is_open())
-        {
-            vf << maxVersion << "\n";
-            vf.close();
-            std::filesystem::rename(tmpVerPath, resolvedVerPath, verEc);
-        }
-
+        AtomicFile::write(resolvedVerPath, std::to_string(maxVersion) + "\n");
         return true;
     }
     catch (const std::exception& e)

@@ -20,11 +20,13 @@
 #include "accelaluaparser.hpp"
 #include "acceladepotdownloader.hpp"
 #include "accelapostprocess.hpp"
+#include "../atomic_file.hpp"
 
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <csignal>
 #include <filesystem>
 #include <algorithm>
 #include <array>
@@ -48,6 +50,25 @@ static void logMsg(const char* fmt, ...)
     vfprintf(stderr, fmt, args);
     va_end(args);
 }
+
+// ── PID file & Signal handling ───────────────────────────────────────────────
+static std::string g_pidFilePath;
+
+static void helperSignalHandler(int sig)
+{
+    CppAccela::DepotDownloader::killCurrentChild();
+    if (!g_pidFilePath.empty()) unlink(g_pidFilePath.c_str());
+    _exit(128 + sig);
+}
+
+struct PidFileGuard
+{
+    std::string path;
+    ~PidFileGuard()
+    {
+        if (!path.empty()) unlink(path.c_str());
+    }
+};
 
 // ── Progress file helpers ────────────────────────────────────────────────────
 // Written to /tmp/sls_dl_<appid>.json so the parent process can read it.
@@ -304,7 +325,8 @@ static std::string fetchInstallDir(const std::string& appIdStr)
 
 int main(int argc, char* argv[])
 {
-    sleep(30);
+    // debug sleep for attaching the accela-helper with gdb or lldb
+    // sleep(30);
     if (argc != 2)
     {
         fprintf(stderr, "Usage: %s <appid>\n", argv[0]);
@@ -326,6 +348,22 @@ int main(int argc, char* argv[])
     const std::string tmpBaseEarly(tmpEnvEarly ? tmpEnvEarly : "/tmp");
     g_progressPath = tmpBaseEarly + "/sls_dl_" + appIdStr + ".json";
     writeProgress("starting", "", 0, 0, 0);
+
+    // Write PID file for orphan detection
+    g_pidFilePath = tmpBaseEarly + "/sls_dl_" + appIdStr + ".pid";
+    {
+        FILE* pf = fopen(g_pidFilePath.c_str(), "w");
+        if (pf)
+        {
+            fprintf(pf, "%d\n", getpid());
+            fclose(pf);
+        }
+    }
+    PidFileGuard pidGuard{g_pidFilePath};
+
+    signal(SIGTERM, helperSignalHandler);
+    signal(SIGINT,  helperSignalHandler);
+    signal(SIGHUP,  helperSignalHandler);
 
     // ── 1. Steam paths ────────────────────────────────────────────────────
     const std::string steamRoot = CppAccela::Path::findSteamRoot();
@@ -448,8 +486,14 @@ int main(int argc, char* argv[])
            dlResult.depotsDone, dlResult.depotsTotal,
            static_cast<unsigned long long>(dlResult.totalBytes));
 
-    if (!dlResult.ok)
-        logMsg("WARNING: depot download incomplete — continuing to post-process\n");
+    if (!dlResult.ok || dlResult.depotsDone == 0 || dlResult.depotsDone < dlResult.depotsTotal)
+    {
+        logMsg("ERROR: depot download failed or incomplete (%d/%d depots completed) — aborting without post-processing\n",
+               dlResult.depotsDone, dlResult.depotsTotal);
+        writeProgress("failed", luaMutable.gameName.c_str(), dlResult.depotsDone, dlResult.depotsTotal, 0);
+        AtomicFile::removePath(steamRoot + "/steamapps/downloading/" + appIdStr);
+        return 6;
+    }
 
     writeProgress("postprocessing", luaMutable.gameName.c_str(),
                   dlResult.depotsDone, dlResult.depotsTotal, 96);
@@ -480,12 +524,6 @@ int main(int argc, char* argv[])
         logMsg("WARNING: post-processing had errors for appid=%u\n", appId);
 
     logMsg("pipeline complete for appid=%u\n", appId);
-
-    if (dlResult.depotsDone == 0)
-    {
-        writeProgress("failed", luaMutable.gameName.c_str(), 0, dlResult.depotsTotal, 0);
-        return 6;
-    }
 
     writeProgress("done", luaMutable.gameName.c_str(),
                   dlResult.depotsDone, dlResult.depotsTotal, 100);

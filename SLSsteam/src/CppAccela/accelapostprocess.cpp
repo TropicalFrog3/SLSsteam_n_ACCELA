@@ -1,4 +1,5 @@
 #include "accelapostprocess.hpp"
+#include "../atomic_file.hpp"
 
 // NOTE: Do NOT include config.hpp or use g_config here.
 // This file runs inside the accela-helper binary — no globals, no mutexes.
@@ -171,22 +172,10 @@ namespace CppAccela::PostProcess
             << platformConfig             << "\n"
             << "}\n";
 
-        // Atomic write: write to .tmp then rename
-        const std::string tmpPath = acfPath + ".tmp";
+        // Atomic write: write to temp file then rename
+        if (!AtomicFile::write(acfPath, acf.str()))
         {
-            std::ofstream f(tmpPath, std::ios::trunc);
-            if (!f.is_open())
-            {
-            PPLOG("cannot write ACF temp file %s\n", tmpPath.c_str());
-                return false;
-            }
-            f << acf.str();
-        }
-
-        if (std::rename(tmpPath.c_str(), acfPath.c_str()) != 0)
-        {
-            PPLOG("rename ACF failed: %s\n", strerror(errno));
-            std::remove(tmpPath.c_str());
+            PPLOG("cannot write ACF file %s\n", acfPath.c_str());
             return false;
         }
 
@@ -209,13 +198,11 @@ namespace CppAccela::PostProcess
         try { fs::create_directories(gameDir); }
         catch (...) {}
 
-        std::ofstream f(tokenFile, std::ios::trunc);
-        if (!f.is_open())
+        if (!AtomicFile::write(tokenFile, lua.appToken))
         {
             PPLOG("cannot write apptoken.txt at %s\n", tokenFile.c_str());
             return;
         }
-        f << lua.appToken;
         PPLOG("wrote apptoken.txt -> %s\n", tokenFile.c_str());
     }
 
@@ -501,25 +488,18 @@ namespace CppAccela::PostProcess
         }
 
         // Atomic write
-        const std::string tmpPath = ctx.configPath + ".tmp";
-        {
-            std::ofstream out(tmpPath, std::ios::trunc);
-            if (!out.is_open())
-            {
-                PPLOG("cannot write config tmp file: %s\n", tmpPath.c_str());
-                return;
-            }
+        bool written = AtomicFile::writeStream(ctx.configPath, [&](std::ostream& out) {
             for (size_t i = 0; i < lines.size(); ++i)
             {
                 out << lines[i];
                 if (i + 1 < lines.size()) out << '\n';
             }
-        }
+            return true;
+        });
 
-        if (std::rename(tmpPath.c_str(), ctx.configPath.c_str()) != 0)
+        if (!written)
         {
-            PPLOG("rename config failed: %s\n", strerror(errno));
-            std::remove(tmpPath.c_str());
+            PPLOG("cannot atomically write config: %s\n", ctx.configPath.c_str());
             return;
         }
 
